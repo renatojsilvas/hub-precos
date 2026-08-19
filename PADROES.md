@@ -1,7 +1,7 @@
-# PADROES.md — Constituição técnica (herdada do repo tesouro-direto)
+# PADROES.md — Constituição técnica (herdada do repo tesouro-direto-api)
 
 Este arquivo é a referência normativa dos projetos novos (hub, operacoes, custodia).
-Todo padrão aqui listado tem implementação de referência no repo `tesouro-direto`
+Todo padrão aqui listado tem implementação de referência no repo `tesouro-direto-api`
 (caminho em cada item). **Na dúvida entre este resumo e o código de referência, o
 código de referência vence** — leia-o antes de decidir diferente, e desvios exigem
 justificativa registrada na memória.
