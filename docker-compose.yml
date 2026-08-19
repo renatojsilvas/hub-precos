@@ -4,9 +4,26 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${PG_ADMIN_PW:-admin123}
-    ports: ["5433:5432"]
+      POSTGRES_DB: hub
+      # Senha da role de aplicação `hub`, consumida por
+      # infra/postgres/initdb/01-provision-hub.sh (caminho de ambiente
+      # NOVO). Fail-fast: sem valor no .env, o compose recusa subir —
+      # nunca hardcoded/commitado (PADROES.md §6).
+      HUB_APP_PASSWORD: ${HUB_APP_PASSWORD:?HUB_APP_PASSWORD é obrigatório no .env (senha da role hub da aplicação)}
+    # Só loopback: um Postgres publicado em 0.0.0.0 expõe a instância à
+    # rede toda; a aplicação só precisa alcançá-lo do host local
+    # (appsettings.json aponta para localhost:5433). Mesmo padrão do
+    # serviço `db` em tesouro-direto-api/docker-compose.yml.
+    ports:
+      - "127.0.0.1:5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./infra/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
+      # Hook de provisionamento da role `hub` (ambiente NOVO) + o SQL
+      # canônico que ele invoca, montados em caminhos SEPARADOS de
+      # propósito — ver infra/postgres/initdb/01-provision-hub.sh e
+      # infra/postgres/README.md. Bind-mount: exige `--force-recreate`
+      # no deploy/local para o container enxergar mudança.
+      - ./infra/postgres/initdb:/docker-entrypoint-initdb.d:ro
+      - ./infra/postgres/sql:/opt/hub/sql:ro
 volumes:
   pgdata:
