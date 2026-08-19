@@ -29,6 +29,28 @@
 -- NÃO PORTADO do molde: o bloco de REASSIGN de ownership de uma role
 -- legada (`app`, no tesouro-direto) para a role nova. O Hub é greenfield —
 -- não existe role/objeto pré-existente para reassinar.
+--
+-- NÃO PORTADO do molde: o bloco final de GRANTs explícitos em `public`
+-- (USAGE/CREATE no schema, SELECT/INSERT/... em ALL TABLES, sequences,
+-- functions, ALTER DEFAULT PRIVILEGES). Diferença de fundo com o molde:
+-- lá `td_app` é só titular de privilégios dentro do database
+-- `tesouro_direto`, nunca dona dele. Aqui `hub` é OWNER do próprio
+-- database (linha `ALTER DATABASE ... OWNER TO hub` acima) — a opção
+-- PREFERIDA da ADR-12 (`../plataforma-docs/ARQUITETURA.md` §10: "owner
+-- apenas do seu database (preferido; backup/restore independente) ou
+-- schema"), enquanto o molde usa a segunda opção (owner de schema). A
+-- partir do Postgres 15, o schema `public` de um database novo pertence
+-- ao pseudo-role `pg_database_owner`, do qual o dono do database é membro
+-- automático — `hub` herda USAGE/CREATE em `public` sem GRANT nenhum, e
+-- objetos que ela cria já nascem dela (mesma razão do REASSIGN acima não
+-- ter equivalente aqui). Verificado por execução no cluster real
+-- (`hub-precos-db-1`): `has_schema_privilege('hub','public','CREATE'/
+-- 'USAGE')` = true, `pg_has_role('hub','pg_database_owner','MEMBER')` =
+-- true, e a migration `InitialCreate` do EF já criou
+-- `__EFMigrationsHistory` em `public` conectada como `hub`, sem GRANT
+-- algum. CONSEQUÊNCIA: se `hub` um dia deixar de ser dona do database
+-- (ex.: migrar para o modelo de owner-de-schema), o bloco de GRANTs do
+-- molde volta a ser necessário.
 
 -- Senha via variável de AMBIENTE (HUB_APP_PASSWORD), nunca via argv do
 -- psql — evita aparecer em `ps`/histórico de shell. `\getenv` deixa

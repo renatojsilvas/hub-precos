@@ -64,3 +64,13 @@ O bloco de `REASSIGN`/troca de ownership de uma role legada (`app`, no
 tesouro-direto) para a role nova, e os comentários sobre as tarefas
 79-A/79-B daquele repo. O Hub é greenfield: não há role legada nem objeto
 pré-existente para reassinar.
+
+O bloco final de GRANTs explícitos em `public` (schema, tabelas,
+sequences, functions, default privileges) também não foi portado: `hub` é
+OWNER do próprio database — opção preferida da ADR-12
+(`plataforma-docs/ARQUITETURA.md` §10), diferente do molde, onde `td_app`
+só tem privilégios dentro de `tesouro_direto` sem ser dona dele. Dono de
+database herda USAGE/CREATE em `public` via `pg_database_owner` (PG 15+)
+sem GRANT — verificado por execução em `hub-precos-db-1`. Ver comentário
+correspondente em `hub-role.sql` para os detalhes e a consequência caso
+isso mude no futuro.
