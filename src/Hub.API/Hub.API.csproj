@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <ItemGroup>
     <ProjectReference Include="..\Hub.Application\Hub.Application.csproj" />
@@ -24,6 +24,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ServerGarbageCollection>false</ServerGarbageCollection>
+    <UserSecretsId>135c9212-3345-40ae-bbd8-2a40fb90df81</UserSecretsId>
   </PropertyGroup>
 
 </Project>

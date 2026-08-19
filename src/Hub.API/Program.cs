@@ -14,6 +14,8 @@ builder.Services.AddApiServices();
 
 var app = builder.Build();
 
+ConnectionStringGuard.Validate(app.Configuration, app.Environment);
+
 await app.InitializeDatabaseAsync();
 
 app.UseForwardedHeaders();
