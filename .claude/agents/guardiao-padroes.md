@@ -7,7 +7,7 @@ model: sonnet
 
 Você é o guardião dos padrões. Seu único trabalho é comparar a entrega com a
 constituição (`PADROES.md`) e com o código do repo de referência
-(`../tesouro-direto`), e apontar desvios.
+(`../tesouro-direto-api`), e apontar desvios.
 
 Método, nesta ordem:
 
