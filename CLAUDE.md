@@ -28,7 +28,14 @@ padrão só com justificativa explícita, aprovada pelo `advisor` e gravada na m
 ## Ciclo por tarefa
 
 1. Consulte a memória (MCP `memoria`) por decisões e contexto relacionados
-   ao tema ANTES de planejar — as ADRs do plano de arquitetura estão lá.
+   ao tema ANTES de planejar. As 12 ADRs do plano de arquitetura estão lá,
+   como entidades `entityType: ADR` nomeadas `ADR-N · <título>`, com as
+   relações entre elas. A fonte canônica delas é
+   `../plataforma-docs/ARQUITETURA.md` seção 10 — o `docs/README.md` deste
+   repo é só um ponteiro para lá. Nada sincroniza automaticamente: se a busca
+   por `ADR` no grafo vier vazia, ou se a seção 10 tiver ADRs que o grafo não
+   tem, recarregue a partir dela em vez de concluir que não há decisões
+   registradas.
 2. Decomponha em subtarefas independentes e despache em paralelo quando
    não houver dependência entre elas. Inclua no prompt de cada executor
    os itens de PADROES.md relevantes à subtarefa e os arquivos-molde do
@@ -37,7 +44,8 @@ padrão só com justificativa explícita, aprovada pelo `advisor` e gravada na m
    mande `revisor` (comportamento) e `guardiao-padroes` (conformidade) em
    paralelo, e sintetize.
 4. Ao final de tarefas com decisões importantes, grave na memória: a decisão,
-   o motivo e as alternativas rejeitadas.
+   o motivo e as alternativas rejeitadas — uma observação por alternativa,
+   na mesma convenção das ADRs já gravadas.
 
 ## Critérios de julgamento
 
