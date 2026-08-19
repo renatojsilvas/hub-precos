@@ -39,6 +39,26 @@ Seguro reexecutar quantas vezes for preciso: o script inteiro (criação/
 senha da role `hub`, ownership do database, REVOKE/GRANT de CONNECT) é
 idempotente.
 
+### Atomicidade (o script não deixa estado meio-aplicado)
+
+`hub-role.sql` roda a criação/senha da role e a transferência de
+ownership + REVOKE/GRANT de CONNECT dentro de um único `BEGIN`/`COMMIT`.
+Se o processo cair (kill/OOM/queda de rede) no meio da execução, NADA é
+aplicado — nem a role `hub` fica criada. A garantia está no `.sql`, não
+numa flag do comando acima: não é preciso (nem é preciso lembrar de)
+passar `--single-transaction`/`-1` ao `psql`.
+
+### `-d`/`--dbname` errado NÃO rotaciona a senha da `hub` em silêncio
+
+A role `hub` é global ao cluster (roles não pertencem a um database). O
+`hub-role.sql` guarda o database esperado: aborta com `RAISE EXCEPTION`
+(sem alterar nada) se `current_database()` não bater com a variável de
+ambiente `HUB_DB_NAME` (default `'hub'`). Rodando contra `hub`, não é
+preciso definir nada. Rodando contra outro database (ex.: um futuro
+`hub_e2e`), passe `-e HUB_DB_NAME=hub_e2e` além de `-d hub_e2e` — sem
+isso, o comando aborta em vez de rotacionar a senha da role `hub` de
+verdade e abrir o database errado para `hub`.
+
 ## Verificação rápida
 
 ```sql
@@ -46,6 +66,29 @@ SELECT rolname, rolsuper, rolcanlogin FROM pg_roles WHERE rolname = 'hub';
 ```
 
 `rolsuper` deve ser `f`.
+
+## Risco residual conhecido: senha em claro fora do psql/`docker logs`
+
+`hub-role.sql` (o `\o /dev/null` .. `\o` ao redor do `set_config` da
+senha) protege a saída do **comando `psql`** — a senha não aparece no
+stdout/stderr daquele processo, e portanto não aparece em `docker logs`.
+Isso é tudo que a supressão promete; não é uma garantia geral sobre todo
+lugar onde a senha circula.
+
+**O que NÃO está protegido**, porque é inerente a qualquer segredo
+passado por variável de ambiente no `docker-compose.yml` (não é uma
+regressão desta correção, e não viola PADROES.md §6 — nada disso vai
+para o git):
+
+- `docker inspect hub-precos-db-1 --format '{{json .Config.Env}}'` —
+  mostra `HUB_APP_PASSWORD` em claro, porque a env var fica associada ao
+  processo do container enquanto ele existir.
+- `docker compose config` — expande `${HUB_APP_PASSWORD}` do `.env` e
+  imprime o valor em claro; é trivial vazar isso colando a saída num
+  ticket/PR/CI sem perceber.
+
+Trate a saída desses dois comandos como segredo (não cole em lugar
+compartilhado) da mesma forma que trataria o `.env`.
 
 ## Decisão de desenho
 

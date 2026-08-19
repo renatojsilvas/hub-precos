@@ -20,6 +20,20 @@ fi
 # Não passamos a senha via `-v` (argv do psql): HUB_APP_PASSWORD já está no
 # ambiente do processo (herdado do container), e o SQL a lê com `\getenv`.
 # Isso evita a senha aparecer em `ps`/histórico de shell.
+#
+# Não passamos `--single-transaction`/`-1`: a atomicidade fim-a-fim (criação
+# da role + ownership/REVOKE do database, tudo ou nada) já é garantida DENTRO
+# de `hub-role.sql` (BEGIN/COMMIT explícitos), não por uma flag desta
+# invocação — ver o comentário "DEFEITO 1" no topo daquele arquivo. Isso
+# também vale para o caminho manual (`docker exec ... psql -f`, ver
+# `infra/postgres/README.md`), sem depender de quem digita o comando lembrar
+# de repetir a flag.
+#
+# Não passamos `HUB_DB_NAME` aqui: neste caminho o database de destino é
+# sempre `$POSTGRES_DB` (definido pelo docker-compose.yml como `hub`), que já
+# bate com o default `'hub'` da guarda dentro de `hub-role.sql` — a variável
+# só é necessária no caminho manual, contra um database com outro nome (ex.:
+# um futuro `hub_e2e`).
 psql -v ON_ERROR_STOP=1 \
   --username "$POSTGRES_USER" \
   --dbname "$POSTGRES_DB" \

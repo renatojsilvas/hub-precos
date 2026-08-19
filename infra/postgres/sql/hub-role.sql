@@ -51,6 +51,85 @@
 -- algum. CONSEQUÊNCIA: se `hub` um dia deixar de ser dona do database
 -- (ex.: migrar para o modelo de owner-de-schema), o bloco de GRANTs do
 -- molde volta a ser necessário.
+--
+-- === Correções de revisão adversarial (2026-08-18) ===
+--
+-- DEFEITO 1 — atomicidade fim-a-fim. Antes, o provisionamento de fato
+-- (CREATE/ALTER ROLE hub, depois ALTER DATABASE ... OWNER + REVOKE/GRANT
+-- CONNECT) rodava em DOIS blocos `DO $$` separados — cada um sua própria
+-- transação implícita. Uma queda do processo (kill -9, OOM, rede) ENTRE os
+-- dois blocos commitava o primeiro e perdia o segundo: a role `hub` ficava
+-- criada e LOGIN, mas o database continuava com owner `postgres` e SEM
+-- REVOKE CONNECT de PUBLIC — qualquer role do cluster conectava. E como a
+-- imagem oficial só roda `/docker-entrypoint-initdb.d/` em volume vazio,
+-- um `docker start` seguinte sobe "ready to accept connections" sem
+-- sinalizar nada ao operador: o estado meio-provisionado sobrevive em
+-- silêncio. `CREATE ROLE`/`ALTER ROLE`/`ALTER DATABASE ... OWNER`/
+-- `GRANT`/`REVOKE ... ON DATABASE` são todos transacionais no Postgres
+-- (diferente de `CREATE DATABASE`, que este script não usa — o
+-- `POSTGRES_DB: hub` do compose já cria o database antes deste SQL
+-- rodar). Corrigido envolvendo os dois blocos `DO` num único `BEGIN` /
+-- `COMMIT` explícito, ABAIXO. Preferido a `psql --single-transaction`
+-- (equivalente a `-1`, aplicado na invocação) por uma razão específica
+-- deste arquivo: ele roda por DOIS caminhos de invocação diferentes
+-- (initdb via `01-provision-hub.sh` e `docker exec ... psql -f` manual,
+-- documentado no README) — se a garantia estivesse só na flag de
+-- invocação, bastaria alguém copiar o comando do README sem a flag (ou
+-- digitá-lo de memória) para reabrir a janela do Defeito 1. Com
+-- `BEGIN`/`COMMIT` dentro do próprio `.sql`, a atomicidade vale nos DOIS
+-- caminhos sempre, governada pelo ARQUIVO, e não depende de quem digita o
+-- comando lembrar de uma flag.
+--
+-- DEFEITO 2 — guarda contra `-d`/`--dbname` errado. A role `hub` é
+-- GLOBAL ao cluster (roles não pertencem a um database). Antes, um erro
+-- de digitação no `-d` do comando do README (ex.: `-d postgres` em vez de
+-- `-d hub`) rodava o script inteiro contra o database errado: o
+-- `current_database()` usado no ALTER DATABASE/REVOKE/GRANT corretamente
+-- evita hardcode do NOME do database (então aquelas linhas afetam só o
+-- database ao qual o psql de fato se conectou) — mas isso não protege a
+-- ROLE, que é do cluster. O `ALTER ROLE hub ... PASSWORD` rodava do mesmo
+-- jeito, ROTACIONANDO em silêncio a senha da role `hub` usada pelo
+-- database `hub` de verdade, e o database errado ainda ganhava owner
+-- `hub` + CONNECT. Confirmado por autenticação real: a senha antiga
+-- parava de funcionar em `hub` depois de rodar isto contra outro banco.
+-- Corrigido com uma GUARDA (bloco `DO` abaixo, ANTES de qualquer DDL) que
+-- aborta com `RAISE EXCEPTION` se `current_database()` não bater com o
+-- nome esperado. Nome esperado vem da variável de ambiente `HUB_DB_NAME`
+-- (default `'hub'`) — NÃO hardcoded — pela mesma razão de fundo que o
+-- molde (`td-app-role.sql`) usa `current_database()` em vez de nome fixo:
+-- o Hub ainda não tem database de e2e, mas a ADR-12 já assume múltiplos
+-- databases por serviço (ex.: um futuro `hub_e2e`, espelhando
+-- `tesouro_direto`/`tesouro_direto_e2e` no molde) — hardcodar `'hub'`
+-- reintroduziria a mesma rigidez que `current_database()` evita em todo o
+-- resto do arquivo, e quebraria o dia em que este script precisar rodar
+-- contra `hub_e2e`. `HUB_DB_NAME` com default `'hub'` preserva a mesma
+-- flexibilidade do molde sem abrir mão da guarda: quem roda contra `hub`
+-- não precisa definir nada; quem roda contra outro database só passa
+-- `HUB_DB_NAME` além de `-d`, e um `-d` errado sem o `HUB_DB_NAME`
+-- correspondente aborta em vez de rotacionar a senha em silêncio.
+
+-- GUARDA (Defeito 2): aborta ANTES de qualquer DDL se o database corrente
+-- não for o esperado. Mesma técnica de ponte psql -> PL/pgSQL usada para a
+-- senha logo abaixo: `:'var'` de psql não interpola dentro de `DO $$ .. $$`
+-- (dollar-quoted), então o valor entra por uma GUC de sessão
+-- (`set_config`) e o bloco `DO` lê com `current_setting`.
+\getenv hub_db_name HUB_DB_NAME
+\if :{?hub_db_name}
+\else
+  \set hub_db_name 'hub'
+\endif
+SELECT set_config('hub.provision_expected_db', :'hub_db_name', false);
+
+DO $$
+DECLARE
+  v_expected_db text := current_setting('hub.provision_expected_db');
+BEGIN
+  IF current_database() <> v_expected_db THEN
+    RAISE EXCEPTION 'hub-role.sql: current_database() = "%", esperado "%" (variável HUB_DB_NAME, default ''hub''). Abortando ANTES de qualquer alteração — confira o -d/--dbname do comando psql. A role hub é global ao cluster: rodar isto contra o database errado rotaciona a senha da role hub de verdade.',
+      current_database(), v_expected_db;
+  END IF;
+END
+$$;
 
 -- Senha via variável de AMBIENTE (HUB_APP_PASSWORD), nunca via argv do
 -- psql — evita aparecer em `ps`/histórico de shell. `\getenv` deixa
@@ -83,11 +162,27 @@
 -- stdout. No caminho do initdb, esse stdout vai para `docker logs`, que
 -- qualquer coletor de observabilidade (Loki/Grafana, etc.) pode indexar —
 -- senha de aplicação em log é inaceitável. Confirmado por execução (ver
--- verificação da tarefa) que, com a supressão, a senha não aparece em
--- nenhum lugar da saída do psql.
+-- verificação da tarefa) que, com a supressão, a senha não aparece na
+-- saída deste comando `psql` (stdout/stderr do processo, e portanto em
+-- `docker logs`). Isso NÃO é uma garantia sobre outros lugares onde a
+-- senha circula por natureza — ex.: a variável de ambiente
+-- `HUB_APP_PASSWORD` continua visível em `docker inspect`/
+-- `docker compose config` enquanto for passada por env var (risco
+-- residual inerente a segredo-por-env-var, documentado em
+-- `infra/postgres/README.md`, não algo que este `\o` resolve ou promete
+-- resolver).
 \o /dev/null
 SELECT set_config('hub.provision_password', :'hub_app_password', false);
 \o
+
+-- ATOMICIDADE (Defeito 1): os dois blocos `DO` abaixo — criação/senha da
+-- role e transferência de ownership + REVOKE/GRANT de CONNECT — formam
+-- UMA transação. Se o processo cair entre eles (kill -9/OOM/queda de
+-- rede), o `BEGIN` nunca chega a `COMMIT` e o Postgres desfaz TUDO ao
+-- encerrar a conexão: nem a role `hub` fica criada. Sem isto, um crash
+-- exatamente aqui deixava a role criada e LOGIN mas o database ainda
+-- aberto a PUBLIC — ver comentário "DEFEITO 1" no topo do arquivo.
+BEGIN;
 
 DO $$
 DECLARE
@@ -123,3 +218,5 @@ BEGIN
   EXECUTE format('GRANT CONNECT ON DATABASE %I TO hub', current_database());
 END
 $$;
+
+COMMIT;
