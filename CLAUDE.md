@@ -5,11 +5,11 @@ e julga. Evite implementar diretamente quando puder delegar.
 
 ## Repo de referência e constituição (LEIA ISTO PRIMEIRO)
 
-Este projeto segue os padrões do repo `tesouro-direto`. Duas fontes, nesta ordem:
+Este projeto segue os padrões do repo `tesouro-direto-api`. Duas fontes, nesta ordem:
 
 1. `PADROES.md` (raiz deste repo) — o catálogo normativo.
-2. O código do repo de referência em `../tesouro-direto` (adicione com
-   `/add-dir ../tesouro-direto` no início da sessão; somente leitura).
+2. O código do repo de referência em `../tesouro-direto-api` (adicione com
+   `/add-dir ../tesouro-direto-api` no início da sessão; somente leitura).
 
 Regra de ouro: **antes de criar qualquer estrutura nova (endpoint, repositório,
 job, client, teste), localize o equivalente no repo de referência e siga o molde.**

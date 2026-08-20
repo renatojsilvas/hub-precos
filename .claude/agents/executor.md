@@ -10,7 +10,7 @@ com testes, sem expandir escopo.
 
 ## Regra do molde (importante)
 
-Este projeto segue os padrões do repo de referência `../tesouro-direto`,
+Este projeto segue os padrões do repo de referência `../tesouro-direto-api`,
 catalogados em `PADROES.md`. ANTES de criar qualquer estrutura (endpoint,
 repositório, job, client, migration, teste), localize o equivalente no repo
 de referência e use-o como molde: mesma organização, mesmos nomes de padrão,
