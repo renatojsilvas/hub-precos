@@ -194,6 +194,35 @@ jobs:
             echo "== provisionamento do banco =="
             ./infra/postgres/provision-remote.sh
 
+            # ---------- guarda de colisão de alias DNS ----------
+            # Incidente de 2026-08-20: este compose declarava o serviço como `app`, e o
+            # Compose registra um alias DNS igual ao NOME DO SERVIÇO na rede em que ele
+            # entra. Como entramos na `tesouro-net`, que é de outro projeto, colidimos com
+            # o `app` de lá: o DNS do Docker guardou os dois IPs sob o mesmo nome e passou
+            # a alternar. Metade das chamadas do tesouro-direto caiu aqui (404 em
+            # /v1/titulos) e metade das raspagens de métrica dele também.
+            #
+            # O rename resolve o caso conhecido; esta guarda resolve a CLASSE. Entrar numa
+            # rede compartilhada exige nome único NA REDE, não só dentro deste arquivo — e
+            # `custodia` e `operacoes` vão entrar na mesma rede depois.
+            echo "== guarda de colisão de alias na tesouro-net =="
+            outros=$(docker ps --format '{{.Names}}' | grep -vx hub-precos-app || true)
+            alheios=$(for c in $outros; do
+              docker inspect -f '{{range $n,$v := .NetworkSettings.Networks}}{{if eq $n "tesouro-net"}}{{range $v.Aliases}}{{.}}{{"\n"}}{{end}}{{end}}{{end}}' "$c" 2>/dev/null
+            done | sort -u | grep -v '^$' || true)
+            for s in $(HUB_APP_PASSWORD=dummy docker compose -f docker-compose.prod.yml config --services); do
+              if echo "$alheios" | grep -qx "$s"; then
+                echo "ERRO: o serviço '$s' colide com um alias DNS já registrado na rede tesouro-net"
+                echo "      por outro container. Subir assim faria o DNS do Docker alternar entre os"
+                echo "      dois, quebrando METADE das chamadas de ambos os lados, sem erro visível."
+                echo "      Renomeie o serviço em docker-compose.prod.yml para algo único na rede."
+                echo "      Aliases já registrados por terceiros:"
+                echo "$alheios" | sed 's/^/        /'
+                exit 1
+              fi
+            done
+            echo "sem colisão"
+
             # ---------- aplicação ----------
             echo "== build e up =="
             docker compose -f docker-compose.prod.yml build
