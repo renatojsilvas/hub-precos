@@ -1,0 +1,105 @@
+name: CI
+
+# Adaptado de tesouro-direto-api/.github/workflows/deploy.yml. Ele tem três jobs
+# (test -> e2e -> deploy); aqui só o `test` tem equivalente:
+#   - `e2e` não foi portado: não há suíte Playwright nem endpoint de negócio para
+#     exercitar ponta a ponta (PADROES.md §8 continua devendo isso).
+#   - `deploy` não foi portado: não existe VPS, nginx nem infra/host neste projeto.
+# Por isso o arquivo se chama ci.yml, e não deploy.yml — o nome não deve prometer
+# um deploy que não acontece.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - run: dotnet restore
+      - run: dotnet build --no-restore
+
+      # Hub.API.Tests sobe um Postgres via Testcontainers (ver ApiTestFactory), então
+      # depende do Docker do runner — que o ubuntu-latest tem. O molde declara um
+      # `services: postgres` no job; aqui isso NÃO foi portado de propósito: nenhum
+      # teste nosso usa banco externo, e um serviço ocioso pareceria configuração
+      # necessária sem ser.
+      - run: dotnet test --no-build --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./test-results/coverage -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
+
+      # Piso MEDIDO neste repo, não copiado do molde (que usa 80% sobre ~82,7%
+      # medidos lá). Medição em 2026-08-19, com os 80 testes da suíte inicial:
+      # 90,82% no total (Hub.Domain 100%, Hub.Application 100%, Hub.API 87,37%,
+      # Hub.Infrastructure 85,00%). O piso fica em 85% — abaixo do medido, para dar
+      # folga a uma feature nova entrar antes dos testes dela, e ainda assim alto o
+      # bastante para a queda ser notada. Subir junto com a cobertura, nunca descer
+      # para acomodar código sem teste.
+      - name: Coverage gate (line >= 85%)
+        run: python3 scripts/coverage-gate.py ./test-results/coverage --threshold 85 --verbose
+
+      # No-op enquanto não houver SONAR_TOKEN configurado no repositório.
+      - name: SonarQube Scan
+        if: env.SONAR_TOKEN != ''
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      # Gate barato que fecha dois furos distintos.
+      #
+      # (1) O runner NÃO tem `.env` (não é versionado), e o docker-compose.yml exige
+      #     ${HUB_APP_PASSWORD:?...}. Sem a dummy abaixo o `config -q` falha. A
+      #     armadilha inversa também é real: localmente o `docker compose` lê o `.env`
+      #     do diretório automaticamente e MASCARA uma variável obrigatória nova — para
+      #     reproduzir a condição do CI use `--env-file /dev/null`. Toda variável
+      #     obrigatória nova no compose precisa entrar aqui no MESMO PR.
+      #     Não usar secrets neste bloco: quebraria o gate em PR vindo de fork.
+      #
+      # (2) `config -q` valida sintaxe e schema, não se a tag pinada EXISTE no
+      #     registry. No repo de referência isso mordeu de verdade (um pin
+      #     prom/prometheus:3.10.0, que não existe — a família prom/* publica com
+      #     prefixo "v"): as validações passavam com exit 0 e só o deploy revelava
+      #     "no such manifest". A lista de imagens sai do próprio `compose config`,
+      #     em vez de uma lista fixa que envelhece.
+      - name: Compose config gate (sintaxe + tags existem no registry)
+        env:
+          HUB_APP_PASSWORD: dummy
+        run: |
+          set -e
+          docker compose -f docker-compose.yml config -q
+
+          images=$(docker compose -f docker-compose.yml config --format json \
+            | jq -r '.services[] | select(.build == null) | .image' | sort -u)
+
+          failed=0
+          for image in $images; do
+            # `if output=$(...)` em vez de atribuição solta: com `set -e`, uma
+            # atribuição que falha mata o script antes da lógica de FALHA/AVISO.
+            if output=$(docker manifest inspect "$image" 2>&1); then
+              echo "OK    $image"
+            elif echo "$output" | grep -qiE 'no such manifest|manifest unknown|not found'; then
+              echo "FALHA $image (tag inexistente no registry)"
+              echo "$output"
+              failed=1
+            else
+              # Rede, timeout ou rate limit do Docker Hub anônimo no IP do runner:
+              # não reprova o job por motivo alheio à tag pinada.
+              echo "AVISO $image: falha ao consultar o manifest (ignorado)"
+              echo "$output"
+            fi
+          done
+
+          if [ "$failed" -ne 0 ]; then
+            echo "Gate reprovado: pelo menos uma tag pinada não existe no registry."
+            exit 1
+          fi
