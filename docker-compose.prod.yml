@@ -14,7 +14,25 @@
 #   docker compose -f docker-compose.prod.yml up -d --build
 
 services:
-  app:
+  # NOME DO SERVIÇO: `hub`, NÃO `app`. Isto não é estética — foi um incidente em
+  # produção (2026-08-20).
+  #
+  # O Compose registra, para cada serviço, um alias DNS igual ao NOME DO SERVIÇO na
+  # rede em que ele entra. `container_name` ACRESCENTA um nome, não substitui esse
+  # alias. Como este compose entra deliberadamente na `tesouro-net`, que já é de outro
+  # projeto, um serviço chamado `app` aqui colide com o `app` do tesouro-direto: o DNS
+  # embutido do Docker não trata isso como erro, guarda os DOIS IPs sob o mesmo nome e
+  # devolve a lista alternada. Metade das chamadas a `app:8080` caía no serviço errado.
+  #
+  # Medido no incidente: `nslookup app` devolvia 172.19.0.4 (tesouro-direto-app) e
+  # 172.19.0.6 (hub-precos-app). Sintomas: o front do tesouro-direto recebia 404 em
+  # `/v1/titulos` (o Hub não tem esse endpoint), e o `prometheus.scrape "app"` do Alloy
+  # raspava o Hub em metade das vezes, poluindo a série `job="tesouro-direto-api"` de
+  # onde saem 12 das 18 regras de alerta daquele projeto.
+  #
+  # REGRA GERAL para qualquer serviço que entre numa rede compartilhada: o nome do
+  # serviço tem que ser único NA REDE, não apenas dentro deste arquivo.
+  hub:
     build: .
     container_name: hub-precos-app
     restart: unless-stopped
