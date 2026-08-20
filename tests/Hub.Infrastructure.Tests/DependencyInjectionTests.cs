@@ -89,8 +89,15 @@ public sealed class DependencyInjectionTests
 
         var builder = new NpgsqlConnectionStringBuilder(dataSource.ConnectionString);
 
-        Assert.True(builder.NoResetOnClose);
-        Assert.Equal(10, builder.MaxPoolSize);
+        Assert.True(
+            builder.NoResetOnClose,
+            "NoResetOnClose evita o RESET a cada devolução de conexão à pool.");
+
+        // 5, não 10: o Hub divide o `max_connections=25` do cluster com td_api, custodia e
+        // operacoes (§12 do plano). Subir este número sem subir o max_connections do cluster
+        // rouba margem dos vizinhos, e o sintoma aparece NELES. Ver o comentário da constante
+        // NpgsqlMaxPoolSize em Hub.Infrastructure/DependencyInjection.cs.
+        Assert.Equal(5, builder.MaxPoolSize);
     }
 
     [Fact]
