@@ -166,6 +166,20 @@ jobs:
             git reset --hard origin/main
 
             # ---------- segredo ----------
+            # NORMALIZAÇÃO ANTES DE QUALQUER USO. Causa raiz do deploy quebrado de
+            # 2026-08-20: o segredo alimenta DOIS caminhos com regras de parsing
+            # diferentes — o provisionamento (via `docker exec -e`, que preserva byte a
+            # byte) e a aplicação (via `.env` do compose, lido POR LINHA, que descarta um
+            # `\n`/`\r` final). Um segredo colado com quebra de linha fazia a role nascer
+            # com um byte a mais do que a aplicação envia, e o sintoma era `28P01` num
+            # container à parte, minutos depois. Normalizar UMA vez, aqui no topo, é o que
+            # garante que os dois caminhos partam do mesmo valor.
+            HUB_APP_PASSWORD="$(printf '%s' "$HUB_APP_PASSWORD" | tr -d '\r\n')"
+            if [ -z "$HUB_APP_PASSWORD" ]; then
+              echo "ERRO: secret HUB_APP_PASSWORD vazio (ou só com quebras de linha)."
+              exit 1
+            fi
+
             # O .env é reescrito por completo a cada deploy, não mesclado. Toda variável
             # obrigatória nova no docker-compose.prod.yml TEM que entrar neste printf no
             # MESMO PR — senão a interpolação do compose falha inteira, antes mesmo de
