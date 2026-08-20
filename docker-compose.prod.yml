@@ -1,0 +1,65 @@
+# Compose de PRODUÇÃO (VPS). Arquivo separado, não overlay do docker-compose.yml,
+# porque a topologia é fundamentalmente outra: aqui NÃO existe serviço `db`.
+#
+# Pela §12 do plano (`plataforma-docs/ARQUITETURA.md`), `td_api`, `hub`, `custodia` e
+# `operacoes` compartilham UM Postgres, com um role e um database por serviço. Na VPS
+# esse Postgres já está de pé (container do tesouro-direto), então subir um segundo
+# seria contrariar a decisão e, numa máquina de 2GB já orçada ao milímetro, competir
+# por memória com quem já está lá.
+#
+# O `docker-compose.yml` da raiz continua sendo o de DESENVOLVIMENTO LOCAL, com banco
+# próprio — e é assim que deve ser: local não deve depender de infraestrutura remota.
+#
+# Uso na VPS (feito pelo job `deploy`, não à mão):
+#   docker compose -f docker-compose.prod.yml up -d --build
+
+services:
+  app:
+    build: .
+    container_name: hub-precos-app
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      # Aponta para o Postgres COMPARTILHADO pelo nome do container, na rede abaixo.
+      # `HUB_DB_HOST` é variável para o caso de o container ter outro nome na VPS —
+      # o preflight do deploy confere que ele existe antes de chegar aqui.
+      # A senha é a MESMA com que a role `hub` foi provisionada por
+      # infra/postgres/provision-remote.sh; se divergirem, a autenticação falha.
+      - ConnectionStrings__DefaultConnection=Host=${HUB_DB_HOST:-tesouro-direto-db};Port=5432;Database=${HUB_DB_NAME:-hub};Username=hub;Password=${HUB_APP_PASSWORD:?HUB_APP_PASSWORD é obrigatório (senha da role hub no Postgres compartilhado)}
+
+    # SEM `ports`: o Hub é interno entre serviços (decisão do dono). Quem precisar
+    # falar com ele — custódia, operações — o alcança por `hub-precos-app:8080` dentro
+    # da rede `tesouro-net`. Não publicar porta no host é a superfície de ataque menor
+    # possível: nem loopback fica exposto, e não há nginx envolvido.
+    # Consequência operacional: para depurar da VPS use
+    #   docker exec hub-precos-app curl -sf http://localhost:8080/health/ready
+    # em vez de curl no host, que não tem por onde chegar.
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      # Folgado de propósito: startup de .NET numa VPS pequena, esperando também o
+      # Postgres compartilhado responder. Não é número medido nesta máquina.
+      start_period: 90s
+
+    # SEM limites de recurso, por decisão do dono ("deixe sem limite, depois
+    # ajustamos"). RISCO REGISTRADO, para quando for ajustar: o compose do molde
+    # decidiu explicitamente CPU por peso (`cpu_shares`) e memória com teto RÍGIDO,
+    # com o argumento de que ciclo de CPU ocioso não se estoca mas memória é estado e
+    # fica retida. Sem teto de memória, um vazamento aqui não derruba o Hub — derruba
+    # o VIZINHO, numa VPS de 2GB onde a TD API vive em 256M. O passo natural é medir o
+    # consumo real depois de alguns dias e fixar um teto folgado (o molde usou ~3× o
+    # medido no caso do Alloy).
+
+    networks:
+      - tesouro-net
+
+networks:
+  # `external: true`: esta rede é criada e governada pelo compose do tesouro-direto,
+  # NÃO por este arquivo. Se ela não existir, o `up` falha alto em vez de criar uma
+  # rede nova e isolada — que seria o pior desfecho, porque o container subiria
+  # saudável e simplesmente não enxergaria o Postgres.
+  tesouro-net:
+    external: true

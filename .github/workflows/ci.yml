@@ -1,12 +1,13 @@
-name: CI
+name: CI / Deploy
 
 # Adaptado de tesouro-direto-api/.github/workflows/deploy.yml. Ele tem três jobs
-# (test -> e2e -> deploy); aqui só o `test` tem equivalente:
-#   - `e2e` não foi portado: não há suíte Playwright nem endpoint de negócio para
-#     exercitar ponta a ponta (PADROES.md §8 continua devendo isso).
-#   - `deploy` não foi portado: não existe VPS, nginx nem infra/host neste projeto.
-# Por isso o arquivo se chama ci.yml, e não deploy.yml — o nome não deve prometer
-# um deploy que não acontece.
+# (test -> e2e -> deploy); aqui são dois:
+#   - `e2e` NÃO foi portado: não há suíte Playwright nem endpoint de negócio para
+#     exercitar ponta a ponta (PADROES.md §8 continua devendo isso). Consequência:
+#     o `deploy` depende direto do `test`, sem etapa intermediária.
+#   - `deploy` foi portado, com duas diferenças de fundo em relação ao molde: o Hub
+#     usa o Postgres COMPARTILHADO que já roda na VPS (§12 do plano) em vez de subir
+#     o seu, e não publica porta nem passa por nginx, porque é interno entre serviços.
 
 on:
   push:
@@ -76,7 +77,13 @@ jobs:
           HUB_APP_PASSWORD: dummy
         run: |
           set -e
+          # Os DOIS composes: o local (app + db) e o de produção (só app, contra o
+          # Postgres compartilhado). Sem validar o de produção aqui, um erro nele só
+          # apareceria no deploy — exatamente o furo que este gate existe para fechar.
+          # `config` não exige que a rede externa `tesouro-net` exista; quem cobra isso
+          # é o `up`, e o preflight do job de deploy checa antes de chegar lá.
           docker compose -f docker-compose.yml config -q
+          docker compose -f docker-compose.prod.yml config -q
 
           images=$(docker compose -f docker-compose.yml config --format json \
             | jq -r '.services[] | select(.build == null) | .image' | sort -u)
@@ -103,3 +110,95 @@ jobs:
             echo "Gate reprovado: pelo menos uma tag pinada não existe no registry."
             exit 1
           fi
+
+  deploy:
+    # Só em push na main (não em PR): PR de fork não deve alcançar a produção, e o
+    # `if` aqui é o que garante isso mesmo com os secrets configurados.
+    if: github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          # Sem script_stop, um comando que falha NÃO interrompe a execução: o passo
+          # seguinte roda, o último comando sucede, e o job fecha VERDE com o deploy
+          # quebrado no meio. Achado registrado no molde, herdado aqui de propósito.
+          script_stop: true
+          envs: HUB_APP_PASSWORD
+          script: |
+            set -e
+            REPO_DIR=/opt/hub-precos
+            mkdir -p "$REPO_DIR"
+            cd "$REPO_DIR"
+
+            # ---------- preflight ----------
+            # Falhar AQUI é barato; falhar depois de construir a imagem e derrubar o
+            # container antigo é caro. As duas checagens abaixo cobrem exatamente as
+            # premissas que este repo não controla, porque pertencem ao tesouro-direto.
+            echo "== preflight =="
+            docker network inspect tesouro-net >/dev/null 2>&1 || {
+              echo "ERRO: rede docker 'tesouro-net' não existe. O compose do tesouro-direto a cria;"
+              echo "sem ela o Hub subiria numa rede isolada e não enxergaria o Postgres."
+              docker network ls
+              exit 1
+            }
+            docker ps --format '{{.Names}}' | grep -qx tesouro-direto-db || {
+              echo "ERRO: container 'tesouro-direto-db' não está rodando — é o Postgres compartilhado (§12 do plano)."
+              docker ps --format '  {{.Names}}'
+              exit 1
+            }
+            echo "preflight ok"
+
+            # ---------- código ----------
+            if [ ! -d .git ]; then
+              git clone https://github.com/${{ github.repository }} .
+            fi
+            # fetch + reset --hard em vez de `git pull`: o pull RECUSA quando há edição
+            # local num arquivo versionado (um hotfix aplicado direto na VPS, por
+            # exemplo), travando o deploy em silêncio e deixando o disco desatualizado
+            # por commits a fio. NÃO usar `git clean`: apagaria o .env escrito abaixo,
+            # que é untracked, e derrubaria o boot.
+            git fetch origin main
+            git reset --hard origin/main
+
+            # ---------- segredo ----------
+            # O .env é reescrito por completo a cada deploy, não mesclado. Toda variável
+            # obrigatória nova no docker-compose.prod.yml TEM que entrar neste printf no
+            # MESMO PR — senão a interpolação do compose falha inteira, antes mesmo de
+            # qualquer container ser tocado.
+            printf 'HUB_APP_PASSWORD=%s\n' "$HUB_APP_PASSWORD" > .env
+            chmod 600 .env
+
+            # ---------- banco ----------
+            # Idempotente: cria o database `hub` se faltar e converge a role. Roda a cada
+            # deploy de propósito — é assim que um cluster novo, ou um que perdeu a role,
+            # se conserta sozinho. Ver infra/postgres/README.md.
+            echo "== provisionamento do banco =="
+            ./infra/postgres/provision-remote.sh
+
+            # ---------- aplicação ----------
+            echo "== build e up =="
+            docker compose -f docker-compose.prod.yml build
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+
+            # ---------- saúde ----------
+            # O container não publica porta, então não há como dar curl a partir do host:
+            # a fonte de verdade é o healthcheck do próprio compose. Esperar por ele
+            # também cobre a migration no boot, que é o passo que mais pode demorar.
+            echo "== esperando ficar healthy =="
+            timeout 300 bash -c 'until [ "$(docker inspect -f "{{.State.Health.Status}}" hub-precos-app 2>/dev/null)" = "healthy" ]; do
+              sleep 5
+            done' || {
+              echo "ERRO: container não ficou healthy. Últimas linhas do log:"
+              docker logs --tail 50 hub-precos-app || true
+              exit 1
+            }
+
+            echo "== deploy concluído =="
+            docker image prune -f
+        env:
+          HUB_APP_PASSWORD: ${{ secrets.HUB_APP_PASSWORD }}

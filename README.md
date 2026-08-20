@@ -103,3 +103,34 @@ siga o molde.
 
 Ver [`infra/postgres/README.md`](infra/postgres/README.md) — provisionamento da role
 `hub`, os dois caminhos de execução do SQL e a armadilha do volume já inicializado.
+
+## Deploy
+
+Automático: todo push na `main` que passe no job `test` dispara o job `deploy`
+(`.github/workflows/ci.yml`), que entra na VPS por SSH, atualiza o clone em
+`/opt/hub-precos`, provisiona o banco e sobe o container.
+
+Topologia de produção, diferente da local em dois pontos:
+
+- **Banco compartilhado.** Não há serviço `db` em produção. O Hub usa o Postgres que
+  já roda na VPS, com role e database próprios, conforme a §12 do plano de
+  arquitetura (`td_api`, `hub`, `custodia` e `operacoes` no mesmo cluster). Quem cria
+  o database e converge a role é `infra/postgres/provision-remote.sh`, executado a
+  cada deploy — é idempotente de propósito, então um cluster novo se conserta sozinho.
+- **Sem porta publicada.** O Hub é interno entre serviços: não passa por nginx e não
+  expõe porta no host. Quem precisar falar com ele o alcança por `hub-precos-app:8080`
+  dentro da rede `tesouro-net`. Para depurar na VPS, use
+  `docker exec hub-precos-app curl -sf http://localhost:8080/health/ready` — `curl` a
+  partir do host não tem por onde chegar.
+
+Segredos necessários em `Settings → Secrets and variables → Actions`: `VPS_HOST`,
+`VPS_USER`, `VPS_SSH_KEY` (chave privada dedicada ao deploy, não a pessoal) e
+`HUB_APP_PASSWORD` (senha da role `hub` no cluster compartilhado — distinta da do
+`.env` local, que é do container de desenvolvimento).
+
+O job falha cedo se a rede `tesouro-net` ou o container `tesouro-direto-db` não
+existirem, antes de construir imagem ou tocar em qualquer container.
+
+**Sem rollback automático:** se a versão nova subir e não ficar `healthy`, o job falha
+e o container fica no ar quebrado — não volta sozinho para a anterior. Aceitável
+enquanto não há consumidor; resolver antes de existir.
