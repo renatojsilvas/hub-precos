@@ -27,6 +27,20 @@ services:
       # infra/postgres/provision-remote.sh; se divergirem, a autenticação falha.
       - ConnectionStrings__DefaultConnection=Host=${HUB_DB_HOST:-tesouro-direto-db};Port=5432;Database=${HUB_DB_NAME:-hub};Username=hub;Password=${HUB_APP_PASSWORD:?HUB_APP_PASSWORD é obrigatório (senha da role hub no Postgres compartilhado)}
 
+      # Logs para o Alloy que já roda nesta VPS (container `alloy` do tesouro-direto,
+      # alcançável pelo nome na rede `tesouro-net`). Ele recebe em `loki.source.api` e
+      # repassa ao Grafana Cloud. O Serilog já etiqueta tudo com `job=hub`/`service=hub`
+      # (ver SerilogExtensions.cs), então os logs do Hub saem separados dos da TD API
+      # sem nenhuma configuração adicional do lado do coletor.
+      #
+      # ASSIMETRIA que explica por que só o log resolve daqui: log é PUSH (a aplicação
+      # inicia, então precisa do endereço do destino — esta linha) e métrica é PULL (o
+      # Alloy inicia, então quem precisa do endereço é ELE). Por isso o scrape do
+      # `/metrics` do Hub exige um alvo novo em `infra/alloy/config.alloy`, arquivo que
+      # mora no repo tesouro-direto e que o CLAUDE.md deste projeto trata como somente
+      # leitura. Essa metade é feita de lá, com um bloco `prometheus.scrape "hub"`.
+      - Loki__Uri=${HUB_LOKI_URI:-http://alloy:3100}
+
     # SEM `ports`: o Hub é interno entre serviços (decisão do dono). Quem precisar
     # falar com ele — custódia, operações — o alcança por `hub-precos-app:8080` dentro
     # da rede `tesouro-net`. Não publicar porta no host é a superfície de ataque menor

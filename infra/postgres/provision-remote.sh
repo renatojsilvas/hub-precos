@@ -30,6 +30,16 @@ set -euo pipefail
 
 : "${HUB_APP_PASSWORD:?HUB_APP_PASSWORD é obrigatória (senha da role hub)}"
 
+# NORMALIZAÇÃO — não é frescura, é a causa raiz de um deploy quebrado (2026-08-20).
+# O segredo chegava ao provisionamento por `docker exec -e`, que preserva o valor
+# byte a byte, e à aplicação pelo `.env` do compose, que é lido POR LINHA e portanto
+# descarta um `\n`/`\r` final. Bastava o segredo ter sido colado com quebra de linha
+# para a role nascer com um byte a mais do que a aplicação envia: `28P01 password
+# authentication failed`, com os dois lados "parecendo" iguais em qualquer comparação
+# feita a partir do `.env`. Normalizar aqui faz os dois caminhos convergirem na origem.
+HUB_APP_PASSWORD="$(printf '%s' "$HUB_APP_PASSWORD" | tr -d '\r\n')"
+[ -n "$HUB_APP_PASSWORD" ] || { echo "ERRO: HUB_APP_PASSWORD ficou vazia após remover quebras de linha." >&2; exit 1; }
+
 PG_CONTAINER="${PG_CONTAINER:-tesouro-direto-db}"
 PG_ADMIN_USER="${PG_ADMIN_USER:-postgres}"
 HUB_DB_NAME="${HUB_DB_NAME:-hub}"
@@ -65,4 +75,32 @@ docker exec -i \
   "$PG_CONTAINER" \
   psql -v ON_ERROR_STOP=1 -U "$PG_ADMIN_USER" -d "$HUB_DB_NAME" -f - < "$ROLE_SQL"
 
-echo "==> pronto: database '$HUB_DB_NAME' e role 'hub' provisionados em '$PG_CONTAINER'"
+echo "==> 3/3 verificando que a credencial provisionada REALMENTE autentica"
+# Por que este passo existe: até 2026-08-20 o script terminava aqui, reportando
+# sucesso sem nunca ter testado a credencial que acabou de criar. Quando o valor
+# divergiu (ver NORMALIZAÇÃO acima), o provisionamento passou verde e o defeito só
+# apareceu minutos depois, como crash-loop da aplicação num container à parte — longe
+# da causa e caro de diagnosticar. Provisionar sem verificar é afirmar sem evidência.
+#
+# O teste tem que passar PELA REDE, e não por `docker exec` no próprio Postgres: o
+# `pg_hba.conf` da imagem oficial tem `host all all 127.0.0.1/32 trust`, então um
+# teste por loopback autentica QUALQUER senha e daria um falso positivo — exatamente
+# o tipo de verificação que parece proteger e não protege.
+PG_NETWORK="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$PG_CONTAINER" | awk '{print $1}')"
+PG_IMAGE="$(docker inspect -f '{{.Config.Image}}' "$PG_CONTAINER")"
+
+[ -n "$PG_NETWORK" ] || { echo "ERRO: não descobri a rede docker de '$PG_CONTAINER'." >&2; exit 1; }
+
+if docker run --rm --network "$PG_NETWORK" \
+     -e PGPASSWORD="$HUB_APP_PASSWORD" \
+     "$PG_IMAGE" \
+     psql -h "$PG_CONTAINER" -U hub -d "$HUB_DB_NAME" -tAc 'select 1' >/dev/null 2>&1; then
+  echo "    credencial confere (autenticou como 'hub' em '$HUB_DB_NAME' via rede '$PG_NETWORK')"
+else
+  echo "ERRO: a role 'hub' foi provisionada mas NÃO autentica com a senha fornecida." >&2
+  echo "      Rede testada: '$PG_NETWORK'. Isso normalmente significa que o valor de" >&2
+  echo "      HUB_APP_PASSWORD difere entre quem provisiona e quem conecta." >&2
+  exit 1
+fi
+
+echo "==> pronto: database '$HUB_DB_NAME' e role 'hub' provisionados e verificados em '$PG_CONTAINER'"
