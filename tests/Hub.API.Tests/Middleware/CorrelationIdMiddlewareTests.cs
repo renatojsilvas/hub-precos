@@ -5,11 +5,6 @@ using Microsoft.Extensions.Configuration;
 
 namespace Hub.API.Tests.Middleware;
 
-/// <summary>
-/// Molde: tesouro-direto-api/tests/TesouroDireto.API.Tests/Middleware/CorrelationIdMiddlewareTests.cs.
-/// Testa Hub.API.Middleware.CorrelationIdMiddleware (regex ^[a-zA-Z0-9\-]{1,64}$, GUID novo
-/// quando ausente/inválido, eco no response) contra um path público (/health/live).
-/// </summary>
 public sealed class CorrelationIdMiddlewareTests(CorrelationIdMiddlewareTests.MiddlewareWebFactory factory)
     : IClassFixture<CorrelationIdMiddlewareTests.MiddlewareWebFactory>
 {
@@ -66,7 +61,7 @@ public sealed class CorrelationIdMiddlewareTests(CorrelationIdMiddlewareTests.Mi
     [InlineData("malicious\r\nheader")]
     [InlineData("a]b[c{d}e")]
     [InlineData("<script>alert(1)</script>")]
-    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")] // 67 chars > 64
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
     [InlineData("café-☠-emoji-💥-unicode")]
     public async Task Request_WithInvalidCorrelationId_ShouldGenerateNewOne(string maliciousId)
     {

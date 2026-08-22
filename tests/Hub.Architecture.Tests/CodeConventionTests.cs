@@ -15,8 +15,6 @@ public sealed class CodeConventionTests
                 && !IsStaticClass(t))
             .ToList();
 
-        // Guarda contra vacuidade: hoje LoggingBehavior<,> já existe no Application,
-        // então este guard não deveria disparar.
         Assert.True(
             applicationClasses.Count > 0,
             "esta asserção só é uma convenção real se houver classes públicas no Application para inspecionar");

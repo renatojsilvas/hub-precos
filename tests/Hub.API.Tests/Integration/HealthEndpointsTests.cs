@@ -18,8 +18,6 @@ public sealed class HealthEndpointsTests(ApiTestFactory factory)
     [Fact]
     public async Task GetHealthReady_ShouldReturn200()
     {
-        // /health/ready passa pelo AddDbContextCheck<AppDbContext>() (DependencyInjection.cs),
-        // então este 200 prova conexão real ao Postgres subido pelo Testcontainers.
         var response = await _client.GetAsync("/health/ready", CancellationToken.None);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);

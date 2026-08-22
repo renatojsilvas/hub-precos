@@ -4,12 +4,6 @@ using System.Text.Json;
 
 namespace Hub.API.Tests.Integration;
 
-/// <summary>
-/// Exercita Hub.API.Extensions.ResultExtensions.ToHttpResult ponta a ponta (PADROES.md §2:
-/// problem+json com detail/code/correlationId/traceId), via os endpoints de teste gated por
-/// Environment.IsEnvironment("Testing") em Program.cs. Sem estes endpoints não haveria como
-/// exercitar a extensão de ponta a ponta hoje: ela não tem NENHUM chamador em produção.
-/// </summary>
 [Collection("api")]
 public sealed class ResultExtensionsEndpointsTests(ApiTestFactory factory)
 {

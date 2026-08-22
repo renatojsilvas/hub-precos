@@ -7,12 +7,6 @@ using Hub.Infrastructure.Persistence;
 
 namespace Hub.API.Tests.Integration;
 
-/// <summary>
-/// Molde: tesouro-direto-api/tests/TesouroDireto.API.Tests/Integration/ApiTestFactory.cs,
-/// podado para o esqueleto do Hub — sem API key, sem FocusBcb/BcbResponder, sem
-/// FakeTimeProvider, sem override de IMemoryCache e sem ResetAsync/TRUNCATE (não há tabela
-/// de negócio ainda; o único DbContext existente não tem DbSet).
-/// </summary>
 public sealed class ApiTestFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
     private const string ConnectionStringEnvVar = "ConnectionStrings__DefaultConnection";

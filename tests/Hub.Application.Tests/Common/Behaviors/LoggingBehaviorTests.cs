@@ -11,18 +11,6 @@ public sealed class LoggingBehaviorTests
 
     private sealed record PlainRequest : IRequest<string>;
 
-    // Fake de ILogger<T> escrito à mão em vez de NSubstitute: os métodos de extensão
-    // LogInformation/LogWarning acabam chamando Log<TState>(..., Func<TState, Exception?, string> formatter),
-    // e configurar esse formatter via NSubstitute exigiria de qualquer forma capturar o TState genérico
-    // por reflexão. Um fake explícito deixa claro, por leitura, exatamente o que é capturado: o nível,
-    // o EventId e o estado estruturado (os pares chave/valor dos templates "{RequestType}", "{ErrorCode}",
-    // "{ErrorDescription}"), que é o que asserimos.
-    //
-    // Asserção deliberadamente NÃO é sobre a mensagem formatada (string): mudar o texto do log
-    // ("Handling X" -> "Processando X") não deveria quebrar o teste, mas trocar o nível ou deixar
-    // de logar o código do erro deveria. O EventId não é usado aqui porque LoggingBehavior não atribui
-    // um EventId explícito às chamadas (LogInformation/LogWarning usam o EventId default, Id=0, para
-    // as duas chamadas), então ele não discrimina os cenários — o estado estruturado sim.
     private sealed class RecordingLogger<T> : ILogger<T>
     {
         public sealed record Entry(LogLevel Level, EventId EventId, IReadOnlyDictionary<string, object?> State);

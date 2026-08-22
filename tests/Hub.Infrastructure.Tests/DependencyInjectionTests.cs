@@ -70,11 +70,6 @@ public sealed class DependencyInjectionTests
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
 
-        // A identidade importa: o SaveChangesAsync do IUnitOfWork precisa ser o do MESMO
-        // AppDbContext que rastreou as entidades no handler. Se a resolução de IUnitOfWork
-        // criasse uma segunda instância de AppDbContext (outro ChangeTracker), o SaveChanges
-        // do UoW não veria as alterações rastreadas no contexto injetado separadamente, e o
-        // commit seria um no-op silencioso.
         Assert.Same(dbContext, unitOfWork);
     }
 
@@ -93,10 +88,6 @@ public sealed class DependencyInjectionTests
             builder.NoResetOnClose,
             "NoResetOnClose evita o RESET a cada devolução de conexão à pool.");
 
-        // 5, não 10: o Hub divide o `max_connections=25` do cluster com td_api, custodia e
-        // operacoes (§12 do plano). Subir este número sem subir o max_connections do cluster
-        // rouba margem dos vizinhos, e o sintoma aparece NELES. Ver o comentário da constante
-        // NpgsqlMaxPoolSize em Hub.Infrastructure/DependencyInjection.cs.
         Assert.Equal(5, builder.MaxPoolSize);
     }
 
@@ -117,11 +108,6 @@ public sealed class DependencyInjectionTests
         Assert.Equal("hub_precos", builder.Database);
         Assert.Equal("hub_role", builder.Username);
 
-        // Não dá para reafirmar a senha aqui: NpgsqlDataSource.ConnectionString devolve a
-        // connection string SEM a senha por design do Npgsql (redação de segredo antes de
-        // expor a string, por exemplo em logs) — não é algo que AddInfrastructure controla
-        // nem um bug a travar. NpgsqlConnectionStringBuilder confirma isso: builder.Password
-        // vem null mesmo com a senha corretamente configurada na origem.
         Assert.Null(builder.Password);
     }
 
@@ -148,9 +134,6 @@ public sealed class DependencyInjectionTests
 
         var dbContextDataSource = dataSourceProperty.GetValue(npgsqlExtension);
 
-        // O EF Core deve usar o MESMO NpgsqlDataSource singleton registrado (e futuramente
-        // compartilhado com leituras via Dapper) — duas instâncias distintas da mesma
-        // connection string voltariam a abrir duas pools.
         Assert.Same(registeredDataSource, dbContextDataSource);
     }
 }

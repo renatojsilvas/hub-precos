@@ -15,9 +15,6 @@ public sealed class DomainConventionTests
     {
         var domainClasses = GetDomainClasses().ToList();
 
-        // Guarda contra vacuidade: sem tipos concretos para inspecionar, o teste
-        // abaixo passaria sempre, mesmo sem checar nada. Hoje já existem Result e
-        // Result<T> no assembly, então este guard não deveria disparar.
         Assert.True(
             domainClasses.Count > 0,
             "esta asserção só é uma convenção real se houver classes públicas no Domain para inspecionar");
@@ -39,8 +36,6 @@ public sealed class DomainConventionTests
             .Where(t => t.IsPublic && !t.IsAbstract && !t.IsNested && IsRecord(t))
             .ToList();
 
-        // Guarda contra vacuidade: hoje o record Error já existe no Domain, então
-        // este guard não deveria disparar.
         Assert.True(
             domainRecords.Count > 0,
             "esta asserção só é uma convenção real se houver records públicos no Domain para inspecionar");
