@@ -4,61 +4,18 @@ services:
     restart: unless-stopped
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
-      # Host=db;Port=5432: rede interna do compose (nome do serviço + porta
-      # do container), NÃO localhost:5433 — aquela é só a publicação no
-      # host, usada por `dotnet run`/psql fora do compose. Credencial pela
-      # MESMA HUB_APP_PASSWORD do .env que provisiona a role `hub` no
-      # serviço `db` (senão a autenticação falha). Fail-fast igual ao `db`
-      # (PADROES.md §6): sem valor no .env, o compose recusa subir. Também
-      # é o que faz o ConnectionStringGuard passar sem user-secrets — este
-      # caminho não usa dotnet user-secrets, só env var, mesmo padrão do
-      # serviço `app` em tesouro-direto-api/docker-compose.yml.
       - ConnectionStrings__DefaultConnection=Host=db;Port=5432;Database=hub;Username=hub;Password=${HUB_APP_PASSWORD:?HUB_APP_PASSWORD é obrigatório no .env (senha da role hub da aplicação)}
-    # Só loopback, mesmo padrão do `db`. Porta 5080 (não 5000: AirPlay
-    # Receiver do macOS; não 5100: é a porta do profile `http` de
-    # src/Hub.API/Properties/launchSettings.json, usado por `dotnet run` —
-    # portas diferentes deixam os dois caminhos (compose e dotnet run)
-    # coexistirem sem colidir).
     ports:
       - "127.0.0.1:5080:8080"
     depends_on:
       db:
         condition: service_healthy
-    # `condition: service_healthy` acima, e não um `depends_on` simples:
-    # sozinho ele só espera o container `db` EXISTIR, não o Postgres
-    # aceitar conexão — a migration do boot do app correria antes do banco
-    # estar pronto e falharia. Ver o healthcheck do `db` abaixo.
-    #
-    # Tempos MEDIDOS (não copiados do molde, que foi calibrado sob os
-    # `cpu_shares`/`deploy.resources.limits` de uma VPS específica que este
-    # compose não tem — item 6 do pedido): boot local observado até
-    # `/health/ready` responder 200, sem nenhum limite de CPU/memória, foi
-    # de poucos segundos após o container `db` ficar healthy. `interval`/
-    # `start_period` abaixo têm folga generosa sobre esse número porque
-    # dimensionar em cima de UMA medição no laptop do dono seria otimismo,
-    # não engenharia — ver a saída real do `docker compose up` no retorno
-    # desta tarefa para o valor observado.
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 30s
-    # Loki__Uri: NÃO sobrescrita aqui. Este compose não tem serviço
-    # `loki`/`alloy` (diferente do molde) — apontar para um host que não
-    # existe na rede do compose não teria efeito prático diferente do
-    # default `http://localhost:3100` de
-    # src/Hub.API/Extensions/SerilogExtensions.cs (também não alcançável
-    # de dentro do container `app`). Em ambos os casos o sink Grafana Loki
-    # fica indisponível — já verificado que isso NÃO derruba o boot nem a
-    # aplicação (Serilog engole a falha do sink). Endereçar de verdade fica
-    # para quando o Hub ganhar sua própria stack de observabilidade.
-    #
-    # NÃO portados: `cpu_shares`, `memswap_limit`, `deploy.resources.limits`
-    # do molde — aqueles valores vêm de medições de footprint numa VPS
-    # específica (ver comentários em tesouro-direto-api/docker-compose.yml)
-    # que não foram feitas para o Hub; copiá-los seria fabricar evidência.
-    # Fica sem limites de recurso até haver medição real deste serviço.
 
   db:
     image: postgres:16-alpine
@@ -67,35 +24,13 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${PG_ADMIN_PW:-admin123}
       POSTGRES_DB: hub
-      # Senha da role de aplicação `hub`, consumida por
-      # infra/postgres/initdb/01-provision-hub.sh (caminho de ambiente
-      # NOVO). Fail-fast: sem valor no .env, o compose recusa subir —
-      # nunca hardcoded/commitado (PADROES.md §6).
       HUB_APP_PASSWORD: ${HUB_APP_PASSWORD:?HUB_APP_PASSWORD é obrigatório no .env (senha da role hub da aplicação)}
-    # Só loopback: um Postgres publicado em 0.0.0.0 expõe a instância à
-    # rede toda. Esta publicação no host NÃO é usada pelo serviço `app`
-    # (que fala com `db:5432` pela rede interna) — ela serve ao `psql` e ao
-    # `dotnet run` local, cuja connection string aponta para
-    # localhost:5433. Mesmo padrão do serviço `db` em
-    # tesouro-direto-api/docker-compose.yml.
     ports:
       - "127.0.0.1:5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # Hook de provisionamento da role `hub` (ambiente NOVO) + o SQL
-      # canônico que ele invoca, montados em caminhos SEPARADOS de
-      # propósito — ver infra/postgres/initdb/01-provision-hub.sh e
-      # infra/postgres/README.md. Bind-mount: exige `--force-recreate`
-      # no deploy/local para o container enxergar mudança.
       - ./infra/postgres/initdb:/docker-entrypoint-initdb.d:ro
       - ./infra/postgres/sql:/opt/hub/sql:ro
-    # Sem isso, `depends_on: db: condition: service_healthy` do `app` não
-    # tem o que esperar — `depends_on` sozinho só garante o container
-    # existir, não o Postgres aceitar conexão. `-U postgres`: acompanha o
-    # bootstrap (POSTGRES_USER acima); `pg_isready` não autentica de fato
-    # (PQping responde OK mesmo com falha de auth), então este healthcheck
-    # não depende de qual role existe, só do servidor aceitar conexões.
-    # Mesmo padrão de tesouro-direto-api/docker-compose.yml (serviço `db`).
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d hub"]
       interval: 5s

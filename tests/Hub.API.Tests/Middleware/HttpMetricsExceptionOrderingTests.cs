@@ -7,14 +7,6 @@ using Microsoft.Extensions.Configuration;
 
 namespace Hub.API.Tests.Middleware;
 
-/// <summary>
-/// Molde: tesouro-direto-api/tests/TesouroDireto.API.Tests/Middleware/HttpMetricsExceptionOrderingTests.cs.
-/// Protege o comentário longo em Program.cs sobre a ordem UseHttpMetrics × UseExceptionHandler:
-/// UseHttpMetrics só lê o status code final da resposta no "finally" do seu próprio middleware,
-/// e é o UseExceptionHandler quem reescreve a resposta para 5xx quando um endpoint lança
-/// exceção. Se a ordem estivesse invertida (UseHttpMetrics por dentro, mais perto do endpoint),
-/// a métrica registraria o status ANTES da reescrita — mascarando incidentes.
-/// </summary>
 public sealed class HttpMetricsExceptionOrderingTests : IClassFixture<HttpMetricsExceptionOrderingTests.OrderingWebFactory>
 {
     private const string ThrowPath = "/_test/throw";
@@ -39,10 +31,6 @@ public sealed class HttpMetricsExceptionOrderingTests : IClassFixture<HttpMetric
 
         var after = await ScrapeAsync();
 
-        // Achado factual (calibrado contra o corpo real de /metrics): o UseExceptionHandler
-        // limpa o endpoint resolvido (context.SetEndpoint(null)) antes de reescrever a resposta,
-        // então a série final gravada pelo UseHttpMetrics carrega endpoint="" para uma request
-        // que terminou em exceção. O que prova a ordem correta é o label `code`, não `endpoint`.
         foreach (var series in new[] { CountSeries, DurationSeries })
         {
             var deltaCode500 = GetValue(after, series, "500") - GetValue(before, series, "500");

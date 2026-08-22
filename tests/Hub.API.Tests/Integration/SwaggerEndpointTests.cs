@@ -33,9 +33,6 @@ public sealed class SwaggerEndpointTests(ApiTestFactory factory)
     [Fact]
     public async Task GetSwaggerJson_ShouldNotExposeAnyBusinessPath()
     {
-        // Contrato "esqueleto sem endpoint de negócio" (só health/metrics/swagger) virando
-        // teste: paths tem que estar vazio. Os endpoints /_test/* são ExcludeFromDescription()
-        // e não deveriam aparecer mesmo em Testing.
         var response = await _client.GetAsync("/swagger/v1/swagger.json", CancellationToken.None);
         var body = await response.Content.ReadAsStringAsync(CancellationToken.None);
 

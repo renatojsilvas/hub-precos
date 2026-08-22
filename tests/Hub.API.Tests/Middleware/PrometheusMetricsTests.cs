@@ -5,7 +5,6 @@ using Microsoft.Extensions.Configuration;
 
 namespace Hub.API.Tests.Middleware;
 
-/// <summary>Molde: tesouro-direto-api/tests/TesouroDireto.API.Tests/Middleware/PrometheusMetricsTests.cs.</summary>
 public sealed class PrometheusMetricsTests : IClassFixture<PrometheusMetricsTests.MetricsWebFactory>
 {
     private readonly HttpClient _client;

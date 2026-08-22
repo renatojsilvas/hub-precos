@@ -32,7 +32,6 @@ public sealed class ResultGenericTests
         var error = new Error("Test.Error", "fail");
         var result = Result<int>.Failure(error);
 
-        // Value não pode ser acessado em um resultado de falha.
         Assert.Throws<InvalidOperationException>(() => { _ = result.Value; });
     }
 
@@ -41,7 +40,6 @@ public sealed class ResultGenericTests
     {
         var result = Result<int>.Success(42);
 
-        // Error não pode ser acessado em um resultado de sucesso.
         Assert.Throws<InvalidOperationException>(() => { _ = result.Error; });
     }
 
@@ -68,7 +66,6 @@ public sealed class ResultGenericTests
     [Fact]
     public void Failure_WithNoneError_ShouldThrowArgumentException()
     {
-        // Error.None não representa uma falha válida.
         Assert.Throws<ArgumentException>(() => { Result<int>.Failure(Error.None); });
     }
 

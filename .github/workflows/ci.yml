@@ -1,14 +1,5 @@
 name: CI / Deploy
 
-# Adaptado de tesouro-direto-api/.github/workflows/deploy.yml. Ele tem três jobs
-# (test -> e2e -> deploy); aqui são dois:
-#   - `e2e` NÃO foi portado: não há suíte Playwright nem endpoint de negócio para
-#     exercitar ponta a ponta (PADROES.md §8 continua devendo isso). Consequência:
-#     o `deploy` depende direto do `test`, sem etapa intermediária.
-#   - `deploy` foi portado, com duas diferenças de fundo em relação ao molde: o Hub
-#     usa o Postgres COMPARTILHADO que já roda na VPS (§12 do plano) em vez de subir
-#     o seu, e não publica porta nem passa por nginx, porque é interno entre serviços.
-
 on:
   push:
     branches: [main]
@@ -31,24 +22,11 @@ jobs:
       - run: dotnet restore
       - run: dotnet build --no-restore
 
-      # Hub.API.Tests sobe um Postgres via Testcontainers (ver ApiTestFactory), então
-      # depende do Docker do runner — que o ubuntu-latest tem. O molde declara um
-      # `services: postgres` no job; aqui isso NÃO foi portado de propósito: nenhum
-      # teste nosso usa banco externo, e um serviço ocioso pareceria configuração
-      # necessária sem ser.
       - run: dotnet test --no-build --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./test-results/coverage -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
 
-      # Piso MEDIDO neste repo, não copiado do molde (que usa 80% sobre ~82,7%
-      # medidos lá). Medição em 2026-08-19, com os 80 testes da suíte inicial:
-      # 90,82% no total (Hub.Domain 100%, Hub.Application 100%, Hub.API 87,37%,
-      # Hub.Infrastructure 85,00%). O piso fica em 85% — abaixo do medido, para dar
-      # folga a uma feature nova entrar antes dos testes dela, e ainda assim alto o
-      # bastante para a queda ser notada. Subir junto com a cobertura, nunca descer
-      # para acomodar código sem teste.
       - name: Coverage gate (line >= 85%)
         run: python3 scripts/coverage-gate.py ./test-results/coverage --threshold 85 --verbose
 
-      # No-op enquanto não houver SONAR_TOKEN configurado no repositório.
       - name: SonarQube Scan
         if: env.SONAR_TOKEN != ''
         uses: SonarSource/sonarqube-scan-action@v5
@@ -56,32 +34,11 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
-      # Gate barato que fecha dois furos distintos.
-      #
-      # (1) O runner NÃO tem `.env` (não é versionado), e o docker-compose.yml exige
-      #     ${HUB_APP_PASSWORD:?...}. Sem a dummy abaixo o `config -q` falha. A
-      #     armadilha inversa também é real: localmente o `docker compose` lê o `.env`
-      #     do diretório automaticamente e MASCARA uma variável obrigatória nova — para
-      #     reproduzir a condição do CI use `--env-file /dev/null`. Toda variável
-      #     obrigatória nova no compose precisa entrar aqui no MESMO PR.
-      #     Não usar secrets neste bloco: quebraria o gate em PR vindo de fork.
-      #
-      # (2) `config -q` valida sintaxe e schema, não se a tag pinada EXISTE no
-      #     registry. No repo de referência isso mordeu de verdade (um pin
-      #     prom/prometheus:3.10.0, que não existe — a família prom/* publica com
-      #     prefixo "v"): as validações passavam com exit 0 e só o deploy revelava
-      #     "no such manifest". A lista de imagens sai do próprio `compose config`,
-      #     em vez de uma lista fixa que envelhece.
       - name: Compose config gate (sintaxe + tags existem no registry)
         env:
           HUB_APP_PASSWORD: dummy
         run: |
           set -e
-          # Os DOIS composes: o local (app + db) e o de produção (só app, contra o
-          # Postgres compartilhado). Sem validar o de produção aqui, um erro nele só
-          # apareceria no deploy — exatamente o furo que este gate existe para fechar.
-          # `config` não exige que a rede externa `tesouro-net` exista; quem cobra isso
-          # é o `up`, e o preflight do job de deploy checa antes de chegar lá.
           docker compose -f docker-compose.yml config -q
           docker compose -f docker-compose.prod.yml config -q
 
@@ -90,8 +47,6 @@ jobs:
 
           failed=0
           for image in $images; do
-            # `if output=$(...)` em vez de atribuição solta: com `set -e`, uma
-            # atribuição que falha mata o script antes da lógica de FALHA/AVISO.
             if output=$(docker manifest inspect "$image" 2>&1); then
               echo "OK    $image"
             elif echo "$output" | grep -qiE 'no such manifest|manifest unknown|not found'; then
@@ -99,8 +54,6 @@ jobs:
               echo "$output"
               failed=1
             else
-              # Rede, timeout ou rate limit do Docker Hub anônimo no IP do runner:
-              # não reprova o job por motivo alheio à tag pinada.
               echo "AVISO $image: falha ao consultar o manifest (ignorado)"
               echo "$output"
             fi
@@ -112,8 +65,6 @@ jobs:
           fi
 
   deploy:
-    # Só em push na main (não em PR): PR de fork não deve alcançar a produção, e o
-    # `if` aqui é o que garante isso mesmo com os secrets configurados.
     if: github.event_name == 'push'
     needs: test
     runs-on: ubuntu-latest
@@ -124,9 +75,6 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          # Sem script_stop, um comando que falha NÃO interrompe a execução: o passo
-          # seguinte roda, o último comando sucede, e o job fecha VERDE com o deploy
-          # quebrado no meio. Achado registrado no molde, herdado aqui de propósito.
           script_stop: true
           envs: HUB_APP_PASSWORD
           script: |
@@ -135,10 +83,6 @@ jobs:
             mkdir -p "$REPO_DIR"
             cd "$REPO_DIR"
 
-            # ---------- preflight ----------
-            # Falhar AQUI é barato; falhar depois de construir a imagem e derrubar o
-            # container antigo é caro. As duas checagens abaixo cobrem exatamente as
-            # premissas que este repo não controla, porque pertencem ao tesouro-direto.
             echo "== preflight =="
             docker network inspect tesouro-net >/dev/null 2>&1 || {
               echo "ERRO: rede docker 'tesouro-net' não existe. O compose do tesouro-direto a cria;"
@@ -153,58 +97,24 @@ jobs:
             }
             echo "preflight ok"
 
-            # ---------- código ----------
             if [ ! -d .git ]; then
               git clone https://github.com/${{ github.repository }} .
             fi
-            # fetch + reset --hard em vez de `git pull`: o pull RECUSA quando há edição
-            # local num arquivo versionado (um hotfix aplicado direto na VPS, por
-            # exemplo), travando o deploy em silêncio e deixando o disco desatualizado
-            # por commits a fio. NÃO usar `git clean`: apagaria o .env escrito abaixo,
-            # que é untracked, e derrubaria o boot.
             git fetch origin main
             git reset --hard origin/main
 
-            # ---------- segredo ----------
-            # NORMALIZAÇÃO ANTES DE QUALQUER USO. Causa raiz do deploy quebrado de
-            # 2026-08-20: o segredo alimenta DOIS caminhos com regras de parsing
-            # diferentes — o provisionamento (via `docker exec -e`, que preserva byte a
-            # byte) e a aplicação (via `.env` do compose, lido POR LINHA, que descarta um
-            # `\n`/`\r` final). Um segredo colado com quebra de linha fazia a role nascer
-            # com um byte a mais do que a aplicação envia, e o sintoma era `28P01` num
-            # container à parte, minutos depois. Normalizar UMA vez, aqui no topo, é o que
-            # garante que os dois caminhos partam do mesmo valor.
             HUB_APP_PASSWORD="$(printf '%s' "$HUB_APP_PASSWORD" | tr -d '\r\n')"
             if [ -z "$HUB_APP_PASSWORD" ]; then
               echo "ERRO: secret HUB_APP_PASSWORD vazio (ou só com quebras de linha)."
               exit 1
             fi
 
-            # O .env é reescrito por completo a cada deploy, não mesclado. Toda variável
-            # obrigatória nova no docker-compose.prod.yml TEM que entrar neste printf no
-            # MESMO PR — senão a interpolação do compose falha inteira, antes mesmo de
-            # qualquer container ser tocado.
             printf 'HUB_APP_PASSWORD=%s\n' "$HUB_APP_PASSWORD" > .env
             chmod 600 .env
 
-            # ---------- banco ----------
-            # Idempotente: cria o database `hub` se faltar e converge a role. Roda a cada
-            # deploy de propósito — é assim que um cluster novo, ou um que perdeu a role,
-            # se conserta sozinho. Ver infra/postgres/README.md.
             echo "== provisionamento do banco =="
             ./infra/postgres/provision-remote.sh
 
-            # ---------- guarda de colisão de alias DNS ----------
-            # Incidente de 2026-08-20: este compose declarava o serviço como `app`, e o
-            # Compose registra um alias DNS igual ao NOME DO SERVIÇO na rede em que ele
-            # entra. Como entramos na `tesouro-net`, que é de outro projeto, colidimos com
-            # o `app` de lá: o DNS do Docker guardou os dois IPs sob o mesmo nome e passou
-            # a alternar. Metade das chamadas do tesouro-direto caiu aqui (404 em
-            # /v1/titulos) e metade das raspagens de métrica dele também.
-            #
-            # O rename resolve o caso conhecido; esta guarda resolve a CLASSE. Entrar numa
-            # rede compartilhada exige nome único NA REDE, não só dentro deste arquivo — e
-            # `custodia` e `operacoes` vão entrar na mesma rede depois.
             echo "== guarda de colisão de alias na tesouro-net =="
             outros=$(docker ps --format '{{.Names}}' | grep -vx hub-precos-app || true)
             alheios=$(for c in $outros; do
@@ -223,15 +133,10 @@ jobs:
             done
             echo "sem colisão"
 
-            # ---------- aplicação ----------
             echo "== build e up =="
             docker compose -f docker-compose.prod.yml build
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
 
-            # ---------- saúde ----------
-            # O container não publica porta, então não há como dar curl a partir do host:
-            # a fonte de verdade é o healthcheck do próprio compose. Esperar por ele
-            # também cobre a migration no boot, que é o passo que mais pode demorar.
             echo "== esperando ficar healthy =="
             timeout 300 bash -c 'until [ "$(docker inspect -f "{{.State.Health.Status}}" hub-precos-app 2>/dev/null)" = "healthy" ]; do
               sleep 5

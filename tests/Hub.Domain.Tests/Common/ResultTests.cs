@@ -30,14 +30,12 @@ public sealed class ResultTests
     {
         var result = Result.Success();
 
-        // Error não pode ser acessado em um resultado de sucesso.
         Assert.Throws<InvalidOperationException>(() => { _ = result.Error; });
     }
 
     [Fact]
     public void Failure_WithNoneError_ShouldThrowArgumentException()
     {
-        // Error.None não representa uma falha válida.
         Assert.Throws<ArgumentException>(() => { Result.Failure(Error.None); });
     }
 

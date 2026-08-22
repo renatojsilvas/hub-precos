@@ -5,13 +5,6 @@ using Microsoft.Extensions.Configuration;
 
 namespace Hub.API.Tests.Middleware;
 
-/// <summary>
-/// Molde: tesouro-direto-api/tests/TesouroDireto.API.Tests/Middleware/HttpMetricsExclusionTests.cs,
-/// adaptado para a chave de configuração do Hub (Metrics:ExcludedPaths, não ApiKey:ExcludedPaths
-/// — ver appsettings.json). O Hub não tem rota de negócio "/" como o molde; o positivo de
-/// controle usa /_test/result/success (endpoint roteado, sem exceção) para provar que o scrape
-/// não é vácuo e que UseHttpMetrics está de fato instrumentando rotas não excluídas.
-/// </summary>
 public sealed class HttpMetricsExclusionTests : IClassFixture<HttpMetricsExclusionTests.MetricsWebFactory>
 {
     private readonly HttpClient _client;
