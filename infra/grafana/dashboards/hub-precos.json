@@ -1,0 +1,145 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": ["hub-precos"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "title": "Hub de Preços",
+  "uid": "hub-precos",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Target",
+      "description": "up=1 significa que o Alloy conseguiu raspar /metrics. Não diz nada sobre o conteúdo.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "up{job=\"hub-precos\"}", "legendFormat": "up", "refId": "A" }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red", "index": 0 }, "1": { "text": "UP", "color": "green", "index": 1 } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Uptime do processo",
+      "description": "Reinício súbito aqui, sem deploy, é sinal de crash-loop ou OOM (o container não tem limite de memória).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        { "expr": "time() - process_start_time_seconds{job=\"hub-precos\"}", "legendFormat": "uptime", "refId": "A" }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "Health checks",
+      "description": "1 = Healthy. O AppDbContext aqui é a checagem que abre conexão real com o Postgres compartilhado.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "aspnetcore_healthcheck_status{job=\"hub-precos\"}", "legendFormat": "{{name}}", "refId": "A" }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "Unhealthy", "color": "red", "index": 0 }, "1": { "text": "Healthy", "color": "green", "index": 1 } } }
+          ]
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Requisições em andamento",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [
+        { "expr": "sum(http_requests_in_progress{job=\"hub-precos\"})", "legendFormat": "em voo", "refId": "A" }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Requisições por status",
+      "description": "/health, /metrics e /swagger são excluídos da instrumentação (Metrics:ExcludedPaths), então este painel mostra só tráfego real. Enquanto não houver endpoint de negócio, o esperado é ficar vazio — qualquer coisa aqui merece explicação.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        { "expr": "sum by (code) (rate(http_requests_received_total{job=\"hub-precos\"}[5m]))", "legendFormat": "{{code}}", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "fillOpacity": 10 } }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Latência (p95 / p50)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job=\"hub-precos\"}[5m])))", "legendFormat": "p95", "refId": "A" },
+        { "expr": "histogram_quantile(0.50, sum by (le) (rate(http_request_duration_seconds_bucket{job=\"hub-precos\"}[5m])))", "legendFormat": "p50", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 0 } }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Pool de conexões Postgres",
+      "description": "O teto é 5 por decisão de ORÇAMENTO, não de performance: o cluster é compartilhado com td_api, custodia e operacoes, e o max_connections=25 está repartido entre eles. Encostar no teto aqui é motivo para rever o orçamento do cluster, não só para subir este número.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        { "expr": "npgsql_db_client_connections_usage{job=\"hub-precos\"}", "legendFormat": "{{state}}", "refId": "A" },
+        { "expr": "npgsql_db_client_connections_max{job=\"hub-precos\"}", "legendFormat": "teto (MaxPoolSize)", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 10 } }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Memória",
+      "description": "Este container NÃO tem limite de memória. Numa VPS de 2GB onde a TD API vive em 256M, crescimento sustentado aqui derruba o VIZINHO, não o Hub. É o painel para olhar antes de decidir o teto.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        { "expr": "process_working_set_bytes{job=\"hub-precos\"}", "legendFormat": "working set", "refId": "A" },
+        { "expr": "process_private_memory_bytes{job=\"hub-precos\"}", "legendFormat": "privada", "refId": "B" },
+        { "expr": "dotnet_total_memory_bytes{job=\"hub-precos\"}", "legendFormat": "heap gerenciada", "refId": "C" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "fillOpacity": 10 } }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 20 },
+      "targets": [
+        { "expr": "rate(process_cpu_seconds_total{job=\"hub-precos\"}[5m])", "legendFormat": "núcleos", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "custom": { "fillOpacity": 10 } }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Coletas de lixo por geração",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 20 },
+      "targets": [
+        { "expr": "rate(dotnet_collection_count_total{job=\"hub-precos\"}[5m])", "legendFormat": "gen {{generation}}", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "fillOpacity": 0 } }, "overrides": [] }
+    }
+  ]
+}
