@@ -7,6 +7,8 @@ services:
       - ASPNETCORE_ENVIRONMENT=Production
       - ConnectionStrings__DefaultConnection=Host=${HUB_DB_HOST:-tesouro-direto-db};Port=5432;Database=${HUB_DB_NAME:-hub};Username=hub;Password=${HUB_APP_PASSWORD:?HUB_APP_PASSWORD é obrigatório (senha da role hub no Postgres compartilhado)}
       - Loki__Uri=${HUB_LOKI_URI:-http://alloy:3100}
+      - TdApi__BaseUrl=${TD_API_BASE_URL:-http://tesouro-direto-app:8080/}
+      - TdApi__ApiKey=${TD_API_KEY:-}
 
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
