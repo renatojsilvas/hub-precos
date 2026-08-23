@@ -98,5 +98,82 @@ public sealed class TdIngestaoJobTests
 
         Assert.Equal(["failure"], metrics.CiclosRegistrados);
         Assert.Empty(metrics.PrecosRegistrados);
+        Assert.Equal(0, metrics.IngestaoSucessoRegistrada);
+        Assert.Equal(0, metrics.PrecoNovoRegistrado);
+        Assert.Empty(metrics.InstrumentosComFalhaRegistrados);
+    }
+
+    [Fact]
+    public async Task Execute_QuandoResultadoEhSucesso_RegistraTimestampDeSucesso()
+    {
+        var sender = new FakeSender((_, _) =>
+            Task.FromResult<object?>(Result<IngestaoResultado>.Success(ResultadoSucesso)));
+        var metrics = new FakeBusinessMetrics();
+        var job = new TdIngestaoJob(sender, new FakeLogger<TdIngestaoJob>(), metrics);
+        var context = new FakeJobExecutionContext(CancellationToken.None);
+
+        await job.Execute(context);
+
+        Assert.Equal(1, metrics.IngestaoSucessoRegistrada);
+    }
+
+    [Fact]
+    public async Task Execute_QuandoHaPrecosInseridosOuRevisados_RegistraTimestampDePrecoNovo()
+    {
+        var resultado = ResultadoSucesso with { PrecosInseridos = 1, PrecosRevisados = 0 };
+        var sender = new FakeSender((_, _) =>
+            Task.FromResult<object?>(Result<IngestaoResultado>.Success(resultado)));
+        var metrics = new FakeBusinessMetrics();
+        var job = new TdIngestaoJob(sender, new FakeLogger<TdIngestaoJob>(), metrics);
+        var context = new FakeJobExecutionContext(CancellationToken.None);
+
+        await job.Execute(context);
+
+        Assert.Equal(1, metrics.PrecoNovoRegistrado);
+    }
+
+    [Fact]
+    public async Task Execute_QuandoSoHaPrecosRevisadosSemInseridos_RegistraTimestampDePrecoNovo()
+    {
+        var resultado = ResultadoSucesso with { PrecosInseridos = 0, PrecosRevisados = 1 };
+        var sender = new FakeSender((_, _) =>
+            Task.FromResult<object?>(Result<IngestaoResultado>.Success(resultado)));
+        var metrics = new FakeBusinessMetrics();
+        var job = new TdIngestaoJob(sender, new FakeLogger<TdIngestaoJob>(), metrics);
+        var context = new FakeJobExecutionContext(CancellationToken.None);
+
+        await job.Execute(context);
+
+        Assert.Equal(1, metrics.PrecoNovoRegistrado);
+    }
+
+    [Fact]
+    public async Task Execute_QuandoNaoHaPrecosInseridosNemRevisados_NaoRegistraTimestampDePrecoNovo()
+    {
+        var resultado = ResultadoSucesso with { PrecosInseridos = 0, PrecosRevisados = 0 };
+        var sender = new FakeSender((_, _) =>
+            Task.FromResult<object?>(Result<IngestaoResultado>.Success(resultado)));
+        var metrics = new FakeBusinessMetrics();
+        var job = new TdIngestaoJob(sender, new FakeLogger<TdIngestaoJob>(), metrics);
+        var context = new FakeJobExecutionContext(CancellationToken.None);
+
+        await job.Execute(context);
+
+        Assert.Equal(0, metrics.PrecoNovoRegistrado);
+    }
+
+    [Fact]
+    public async Task Execute_QuandoResultadoEhSucesso_RegistraInstrumentosComFalha()
+    {
+        var resultado = ResultadoSucesso with { InstrumentosComFalha = 2 };
+        var sender = new FakeSender((_, _) =>
+            Task.FromResult<object?>(Result<IngestaoResultado>.Success(resultado)));
+        var metrics = new FakeBusinessMetrics();
+        var job = new TdIngestaoJob(sender, new FakeLogger<TdIngestaoJob>(), metrics);
+        var context = new FakeJobExecutionContext(CancellationToken.None);
+
+        await job.Execute(context);
+
+        Assert.Equal([2L], metrics.InstrumentosComFalhaRegistrados);
     }
 }
