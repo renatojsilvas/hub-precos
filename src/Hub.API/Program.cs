@@ -18,6 +18,8 @@ builder.Services.AddApiServices();
 
 var app = builder.Build();
 
+NormalizeApiKeyConfiguration(app.Configuration);
+
 ConnectionStringGuard.Validate(app.Configuration, app.Environment);
 ApiKeyGuard.Validate(app.Configuration, app.Environment);
 
@@ -76,5 +78,14 @@ if (app.Environment.IsEnvironment("Testing"))
 }
 
 app.Run();
+
+static void NormalizeApiKeyConfiguration(IConfiguration configuration)
+{
+    var rawKey = configuration["ApiKey:Key"];
+    if (rawKey is not null)
+    {
+        configuration["ApiKey:Key"] = rawKey.Trim();
+    }
+}
 
 public partial class Program;
