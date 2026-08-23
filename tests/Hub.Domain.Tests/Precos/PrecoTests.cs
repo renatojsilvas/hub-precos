@@ -58,6 +58,88 @@ public sealed class PrecoTests
     }
 
     [Fact]
+    public void Create_CampoTaxaVendaComValorZero_DeveTerSucessoComValorZero()
+    {
+        var result = Preco.Create(
+            InstrumentoId.Create("td:tesouro-selic-2029-03-01").Value,
+            DataRef.Create(new DateOnly(2026, 8, 20)).Value,
+            Campo.Create("taxa_venda").Value,
+            Fonte.Create("td-api").Value,
+            valor: 0m,
+            revisao: 0,
+            observadoEm: DateTimeOffset.UtcNow);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(0m, result.Value.Valor);
+    }
+
+    [Fact]
+    public void Create_CampoTaxaCompraComValorNegativo_DeveTerSucesso()
+    {
+        var result = Preco.Create(
+            InstrumentoId.Create("td:tesouro-selic-2029-03-01").Value,
+            DataRef.Create(new DateOnly(2026, 8, 20)).Value,
+            Campo.Create("taxa_compra").Value,
+            Fonte.Create("td-api").Value,
+            valor: -0.5m,
+            revisao: 0,
+            observadoEm: DateTimeOffset.UtcNow);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(-0.5m, result.Value.Valor);
+    }
+
+    [Fact]
+    public void Create_CampoTaxaVendaComValorPositivo_DeveTerSucesso()
+    {
+        var result = Preco.Create(
+            InstrumentoId.Create("td:tesouro-selic-2029-03-01").Value,
+            DataRef.Create(new DateOnly(2026, 8, 20)).Value,
+            Campo.Create("taxa_venda").Value,
+            Fonte.Create("td-api").Value,
+            valor: 12.34m,
+            revisao: 0,
+            observadoEm: DateTimeOffset.UtcNow);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(12.34m, result.Value.Valor);
+    }
+
+    [Theory]
+    [InlineData("pu_base")]
+    [InlineData("pu_compra")]
+    public void Create_CamposPuBaseEPuCompraComValorZero_DevemFalhar(string campo)
+    {
+        var result = Preco.Create(
+            InstrumentoId.Create("td:tesouro-selic-2029-03-01").Value,
+            DataRef.Create(new DateOnly(2026, 8, 20)).Value,
+            Campo.Create(campo).Value,
+            Fonte.Create("td-api").Value,
+            valor: 0m,
+            revisao: 0,
+            observadoEm: DateTimeOffset.UtcNow);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal(PrecoErrors.ValorInvalido, result.Error);
+    }
+
+    [Fact]
+    public void Create_CampoDesconhecidoComValorZero_DeveFalhar()
+    {
+        var result = Preco.Create(
+            InstrumentoId.Create("td:tesouro-selic-2029-03-01").Value,
+            DataRef.Create(new DateOnly(2026, 8, 20)).Value,
+            Campo.Create("close").Value,
+            Fonte.Create("td-api").Value,
+            valor: 0m,
+            revisao: 0,
+            observadoEm: DateTimeOffset.UtcNow);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal(PrecoErrors.ValorInvalido, result.Error);
+    }
+
+    [Fact]
     public void Create_ComRevisaoNegativa_DeveFalhar()
     {
         var result = Preco.Create(

@@ -6,6 +6,8 @@ namespace Hub.Domain.Precos;
 
 public sealed class Preco
 {
+    private const string PrefixoCampoTaxa = "taxa_";
+
     private Preco(
         InstrumentoId instrumentoId,
         DataRef dataRef,
@@ -46,7 +48,9 @@ public sealed class Preco
         ArgumentNullException.ThrowIfNull(campo);
         ArgumentNullException.ThrowIfNull(fonte);
 
-        if (valor <= 0)
+        var exigeValorPositivo = !campo.Value.StartsWith(PrefixoCampoTaxa, StringComparison.Ordinal);
+
+        if (exigeValorPositivo && valor <= 0)
         {
             return PrecoErrors.ValorInvalido;
         }
