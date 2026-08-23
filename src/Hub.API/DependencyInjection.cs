@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.OpenApi.Models;
 using Prometheus;
 using Hub.API.Extensions;
+using Hub.API.OpenApi;
 using Hub.Infrastructure.Persistence;
 
 namespace Hub.API;
@@ -30,6 +31,8 @@ public static class DependencyInjection
         services.AddSwaggerGen(c =>
         {
             c.SwaggerDoc("v1", new OpenApiInfo { Title = "Hub API", Version = "v1" });
+            c.OperationFilter<PrecosAsOfOperationFilter>();
+            c.OperationFilter<InstrumentsOperationFilter>();
         });
 
         services.AddProblemDetails(options =>

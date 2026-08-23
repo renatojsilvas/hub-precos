@@ -4,6 +4,7 @@ using Hub.Application.Ingestao;
 using Hub.Application.Instrumentos;
 using Hub.Application.Outbox;
 using Hub.Application.Precos;
+using Hub.Infrastructure.Caching;
 using Hub.Infrastructure.Http;
 using Hub.Infrastructure.Ingestao;
 using Hub.Infrastructure.Observability;
@@ -11,6 +12,7 @@ using Hub.Infrastructure.Persistence;
 using Hub.Infrastructure.Persistence.Repositories;
 using Hub.Infrastructure.TdApi;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -26,6 +28,7 @@ namespace Hub.Infrastructure;
 public static class DependencyInjection
 {
     private const int NpgsqlMaxPoolSize = 5;
+    private const long MemoryCacheSizeLimit = 1_000;
 
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
@@ -44,10 +47,21 @@ public static class DependencyInjection
         services.AddScoped<IUnitOfWork>(sp => sp.GetRequiredService<AppDbContext>());
 
         services.AddScoped<IInstrumentoWriteRepository, InstrumentoWriteRepository>();
+        services.AddScoped<IInstrumentoReadRepository, InstrumentoReadRepository>();
         services.AddScoped<IPriceSourceAdapter, TdApiAdapter>();
         services.AddScoped<IIngestaoReadRepository, IngestaoReadRepository>();
         services.AddScoped<IPrecoWriteRepository, PrecoWriteRepository>();
         services.AddScoped<IOutboxWriteRepository, OutboxWriteRepository>();
+        services.AddScoped<IPrecosAsOfReadRepository, PrecosAsOfReadRepository>();
+
+        services.AddMemoryCache(options => options.SizeLimit = MemoryCacheSizeLimit);
+
+        services.AddScoped<ContentVersionProvider>();
+        services.AddScoped<IContentVersionProvider>(sp =>
+            new CachedContentVersionProvider(
+                sp.GetRequiredService<ContentVersionProvider>(),
+                sp.GetRequiredService<IMemoryCache>(),
+                sp.GetRequiredService<IConfiguration>()));
         services.AddSingleton<IBusinessMetrics, BusinessMetrics>();
 
         services.TryAddSingleton(TimeProvider.System);

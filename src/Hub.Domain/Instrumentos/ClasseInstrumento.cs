@@ -16,6 +16,8 @@ public sealed record ClasseInstrumento
 
     public string Name { get; }
 
+    public string? CampoPosicao => this == Td ? "pu_venda" : null;
+
     public static Result<ClasseInstrumento> FromName(string? name)
     {
         var trimmed = name?.Trim() ?? string.Empty;

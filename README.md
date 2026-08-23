@@ -103,6 +103,23 @@ repo de referência [`../tesouro-direto-api`](../tesouro-direto-api) — antes d
 qualquer estrutura nova (endpoint, repositório, job), localize o equivalente lá e
 siga o molde.
 
+## GET /v1/prices/asof
+
+Devolve, por instrumento, o preço vigente numa data (forward-fill por campo). Aceita
+`instruments` (lista de ids separados por vírgula) ou, sem esse parâmetro, devolve o
+catálogo inteiro.
+
+**Decisão registrada (PADROES §2/§9):** a paginação (`page`/`pageSize`, default 100,
+máx 500) é **sempre** aplicada, inclusive quando `instruments` é informado e `page`
+não — diferente do molde de `tesouro-direto-api`, onde omitir `page` devolve a
+coleção inteira. Aqui um cliente pode pedir centenas de instrumentos de uma vez
+(`instruments=td:a,td:b,...`), então uma coleção sem teto violaria a proibição de
+PADROES §9 a "resposta de coleção sem limite superior em contrato novo". Em ambos os
+casos (com ou sem `instruments`), `X-Total-Count` reflete o total de instrumentos
+distintos pedidos (ids duplicados, inclusive por diferença de maiúscula/minúscula,
+contam uma vez só), não o tamanho da página devolvida — é assim que um cliente
+percebe que a resposta foi cortada.
+
 ## Banco de dados
 
 Ver [`infra/postgres/README.md`](infra/postgres/README.md) — provisionamento da role
@@ -153,6 +170,16 @@ O ciclo roda sozinho a cada 15 min (`TdApi:CronSchedule`). Chaves de
 | `TdApi:TamanhoLote` | `1000` | Linhas por transação |
 
 Todo valor inválido cai no default **com aviso no log**, nunca em silêncio.
+
+**Invariante de `observado_em`:** quem escrever em `precos` deve gravar `observado_em`
+com o instante corrente do `TimeProvider` injetado, nunca uma data derivada do dado
+(ex.: a `dataBase` do preço). O `ETag` de `GET /v1/prices/asof`
+(`ContentVersionProvider`) é calculado a partir de `MAX(observado_em)` por razão de
+performance (`precos` chega a milhões de linhas; `COUNT(*)` a cada request seria seq
+scan) — isso só é seguro porque `observado_em` é monotônico com o tempo de ingestão.
+Um writer que grave um timestamp histórico em `observado_em` quebra essa invariante
+em silêncio: o token do ETag não muda, e um cliente com `If-None-Match` recebe `304`
+mesmo com dado novo no banco.
 
 Botão de reparo: apagar os preços de um instrumento força o re-backfill dele no ciclo
 seguinte, porque o watermark é derivado de `MAX(data_ref)` e não existe como coluna

@@ -43,7 +43,7 @@ public sealed class IngestaoReadRepositoryIntegrationTests
             ativoDesde: null,
             ativoAte: ativoAte,
             pagaCupom: false,
-            metadados: "{}",
+            metadados: Metadados.Create("{}").Value,
             criadoEm: DateTimeOffset.UtcNow).Value;
 
         db.Instrumentos.Add(instrumento);
@@ -365,6 +365,8 @@ public sealed class IngestaoReadRepositoryIntegrationTests
         Assert.NotNull(resultado);
         Assert.True(resultado!.IsFailure);
         Assert.Equal("Ingestao.FalhaDeLeitura", resultado.Error.Code);
+        Assert.DoesNotContain("nao-e-uma-data", resultado.Error.Description, StringComparison.Ordinal);
+        Assert.DoesNotContain("date", resultado.Error.Description, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

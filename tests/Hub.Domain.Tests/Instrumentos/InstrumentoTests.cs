@@ -4,6 +4,8 @@ namespace Hub.Domain.Tests.Instrumentos;
 
 public sealed class InstrumentoTests
 {
+    private static Metadados CriarMetadados(string json) => Metadados.Create(json).Value;
+
     [Fact]
     public void Create_ComIdDePrefixoTd_DeveDerivarClasseTd()
     {
@@ -15,7 +17,7 @@ public sealed class InstrumentoTests
             ativoDesde: null,
             ativoAte: new DateOnly(2029, 3, 1),
             pagaCupom: false,
-            metadados: "{}",
+            metadados: CriarMetadados("{}"),
             criadoEm: DateTimeOffset.UtcNow);
 
         Assert.True(result.IsSuccess);
@@ -36,7 +38,7 @@ public sealed class InstrumentoTests
             ativoDesde: null,
             ativoAte: null,
             pagaCupom: false,
-            metadados: "{}",
+            metadados: CriarMetadados("{}"),
             criadoEm: DateTimeOffset.UtcNow);
 
         Assert.True(result.IsFailure);
@@ -53,7 +55,7 @@ public sealed class InstrumentoTests
             ativoDesde: ativoDesde,
             ativoAte: new DateOnly(2029, 3, 1),
             pagaCupom: false,
-            metadados: """{"indexador":"selic"}""",
+            metadados: CriarMetadados("""{"indexador":"selic"}"""),
             criadoEm: criadoEm ?? new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)).Value;
     }
 
@@ -66,13 +68,13 @@ public sealed class InstrumentoTests
             nomeExibicao: "Tesouro Selic 2029 revisado",
             ativoAte: new DateOnly(2029, 6, 1),
             pagaCupom: true,
-            metadados: """{"indexador":"selic","tipo":"Tesouro Selic"}""");
+            metadados: CriarMetadados("""{"indexador":"selic","tipo":"Tesouro Selic"}"""));
 
         Assert.True(result.IsSuccess);
         Assert.Equal("Tesouro Selic 2029 revisado", instrumento.NomeExibicao);
         Assert.Equal(new DateOnly(2029, 6, 1), instrumento.AtivoAte);
         Assert.True(instrumento.PagaCupom);
-        Assert.Equal("""{"indexador":"selic","tipo":"Tesouro Selic"}""", instrumento.Metadados);
+        Assert.Equal("""{"indexador":"selic","tipo":"Tesouro Selic"}""", instrumento.Metadados.Value);
     }
 
     [Fact]
@@ -84,7 +86,7 @@ public sealed class InstrumentoTests
             nomeExibicao: "   ",
             ativoAte: new DateOnly(2029, 6, 1),
             pagaCupom: true,
-            metadados: "{}");
+            metadados: CriarMetadados("{}"));
 
         Assert.True(result.IsFailure);
         Assert.Equal(InstrumentoErrors.NomeExibicaoVazio, result.Error);
@@ -103,7 +105,7 @@ public sealed class InstrumentoTests
             nomeExibicao: "Novo nome",
             ativoAte: new DateOnly(2030, 1, 1),
             pagaCupom: true,
-            metadados: "{}");
+            metadados: CriarMetadados("{}"));
 
         Assert.Equal(idOriginal, instrumento.Id);
         Assert.Equal(classeOriginal, instrumento.Classe);
@@ -138,7 +140,7 @@ public sealed class InstrumentoTests
             : DateOnly.Parse(ativoAteOverride);
         var pagaCupom = instrumento.PagaCupom || pagaCupomOverride;
 
-        var difere = instrumento.DifereDoCatalogo(nomeExibicao, ativoAte, pagaCupom, metadadosOverride);
+        var difere = instrumento.DifereDoCatalogo(nomeExibicao, ativoAte, pagaCupom, CriarMetadados(metadadosOverride));
 
         Assert.True(difere);
     }
@@ -153,13 +155,13 @@ public sealed class InstrumentoTests
             ativoDesde: null,
             ativoAte: new DateOnly(2029, 3, 1),
             pagaCupom: false,
-            metadados: """{"indexador":"selic","tipo":"Tesouro Selic"}""",
+            metadados: CriarMetadados("""{"indexador":"selic","tipo":"Tesouro Selic"}"""),
             criadoEm: new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)).Value;
 
         var metadadosComoOPostgresDevolve = """{"tipo": "Tesouro Selic", "indexador": "selic"}""";
 
         var difere = instrumento.DifereDoCatalogo(
-            instrumento.NomeExibicao, instrumento.AtivoAte, instrumento.PagaCupom, metadadosComoOPostgresDevolve);
+            instrumento.NomeExibicao, instrumento.AtivoAte, instrumento.PagaCupom, CriarMetadados(metadadosComoOPostgresDevolve));
 
         Assert.False(difere);
     }
@@ -174,13 +176,13 @@ public sealed class InstrumentoTests
             ativoDesde: null,
             ativoAte: new DateOnly(2029, 3, 1),
             pagaCupom: false,
-            metadados: """{"indexador":"selic","tipo":"Tesouro Selic"}""",
+            metadados: CriarMetadados("""{"indexador":"selic","tipo":"Tesouro Selic"}"""),
             criadoEm: new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)).Value;
 
         var metadadosComValorDiferente = """{"tipo": "Tesouro Selic", "indexador": "ipca"}""";
 
         var difere = instrumento.DifereDoCatalogo(
-            instrumento.NomeExibicao, instrumento.AtivoAte, instrumento.PagaCupom, metadadosComValorDiferente);
+            instrumento.NomeExibicao, instrumento.AtivoAte, instrumento.PagaCupom, CriarMetadados(metadadosComValorDiferente));
 
         Assert.True(difere);
     }
@@ -195,13 +197,13 @@ public sealed class InstrumentoTests
             ativoDesde: null,
             ativoAte: new DateOnly(2029, 3, 1),
             pagaCupom: false,
-            metadados: "nao-e-json",
+            metadados: CriarMetadados("nao-e-json"),
             criadoEm: new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)).Value;
 
         var difereComMesmoTexto = instrumento.DifereDoCatalogo(
-            instrumento.NomeExibicao, instrumento.AtivoAte, instrumento.PagaCupom, "nao-e-json");
+            instrumento.NomeExibicao, instrumento.AtivoAte, instrumento.PagaCupom, CriarMetadados("nao-e-json"));
         var difereComTextoDiferente = instrumento.DifereDoCatalogo(
-            instrumento.NomeExibicao, instrumento.AtivoAte, instrumento.PagaCupom, "ainda-nao-e-json");
+            instrumento.NomeExibicao, instrumento.AtivoAte, instrumento.PagaCupom, CriarMetadados("ainda-nao-e-json"));
 
         Assert.False(difereComMesmoTexto);
         Assert.True(difereComTextoDiferente);

@@ -168,6 +168,9 @@ namespace Hub.Infrastructure.Persistence.Migrations
 
                     b.HasKey("InstrumentoId", "DataRef", "Campo", "Fonte", "Revisao");
 
+                    b.HasIndex("ObservadoEm")
+                        .HasDatabaseName("ix_precos_observado_em");
+
                     b.HasIndex("InstrumentoId", "DataRef")
                         .IsDescending(false, true)
                         .HasDatabaseName("ix_precos_lookup");

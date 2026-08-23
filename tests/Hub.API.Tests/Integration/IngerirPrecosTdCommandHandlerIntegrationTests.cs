@@ -72,7 +72,7 @@ public sealed class IngerirPrecosTdCommandHandlerIntegrationTests
         var id = InstrumentoId.Create($"td:{sufixo}").Value;
 
         var instrumento = Instrumento.Create(
-            id, sufixo, ativoDesde: null, ativoAte: null, pagaCupom: false, metadados: "{}", criadoEm: Agora).Value;
+            id, sufixo, ativoDesde: null, ativoAte: null, pagaCupom: false, metadados: Metadados.Create("{}").Value, criadoEm: Agora).Value;
         db.Instrumentos.Add(instrumento);
 
         var fonte = InstrumentoFonte.Create(

@@ -31,7 +31,7 @@ public sealed class SwaggerEndpointTests(ApiTestFactory factory)
     }
 
     [Fact]
-    public async Task GetSwaggerJson_ShouldNotExposeAnyBusinessPath()
+    public async Task GetSwaggerJson_ShouldExposeOnlyKnownBusinessPaths()
     {
         var response = await _client.GetAsync("/swagger/v1/swagger.json", CancellationToken.None);
         var body = await response.Content.ReadAsStringAsync(CancellationToken.None);
@@ -39,6 +39,60 @@ public sealed class SwaggerEndpointTests(ApiTestFactory factory)
         using var document = JsonDocument.Parse(body);
         var paths = document.RootElement.GetProperty("paths");
 
-        Assert.Empty(paths.EnumerateObject());
+        var pathNames = paths.EnumerateObject().Select(p => p.Name).ToList();
+
+        Assert.Equal(["/v1/instruments", "/v1/prices/asof"], pathNames);
+    }
+
+    [Fact]
+    public async Task GetSwaggerJson_ForPricesAsOf_DocumentsPaginationAndConditionalGetHeaders()
+    {
+        var response = await _client.GetAsync("/swagger/v1/swagger.json", CancellationToken.None);
+        var body = await response.Content.ReadAsStringAsync(CancellationToken.None);
+
+        using var document = JsonDocument.Parse(body);
+        var get = document.RootElement.GetProperty("paths").GetProperty("/v1/prices/asof").GetProperty("get");
+
+        var parameterNames = get.GetProperty("parameters")
+            .EnumerateArray()
+            .Select(p => p.GetProperty("name").GetString())
+            .ToList();
+
+        Assert.Contains("date", parameterNames);
+        Assert.Contains("instruments", parameterNames);
+        Assert.Contains("page", parameterNames);
+        Assert.Contains("pageSize", parameterNames);
+
+        var headers = get.GetProperty("responses").GetProperty("200").GetProperty("headers");
+
+        Assert.True(headers.TryGetProperty("ETag", out _), $"deveria documentar o header ETag.\n{body}");
+        Assert.True(headers.TryGetProperty("X-Total-Count", out _), $"deveria documentar o header X-Total-Count.\n{body}");
+        Assert.True(headers.TryGetProperty("Link", out _), $"deveria documentar o header Link.\n{body}");
+    }
+
+    [Fact]
+    public async Task GetSwaggerJson_ForInstruments_DocumentsFiltersPaginationAndConditionalGetHeaders()
+    {
+        var response = await _client.GetAsync("/swagger/v1/swagger.json", CancellationToken.None);
+        var body = await response.Content.ReadAsStringAsync(CancellationToken.None);
+
+        using var document = JsonDocument.Parse(body);
+        var get = document.RootElement.GetProperty("paths").GetProperty("/v1/instruments").GetProperty("get");
+
+        var parameterNames = get.GetProperty("parameters")
+            .EnumerateArray()
+            .Select(p => p.GetProperty("name").GetString())
+            .ToList();
+
+        Assert.Contains("classe", parameterNames);
+        Assert.Contains("query", parameterNames);
+        Assert.Contains("page", parameterNames);
+        Assert.Contains("pageSize", parameterNames);
+
+        var headers = get.GetProperty("responses").GetProperty("200").GetProperty("headers");
+
+        Assert.True(headers.TryGetProperty("ETag", out _), $"deveria documentar o header ETag.\n{body}");
+        Assert.True(headers.TryGetProperty("X-Total-Count", out _), $"deveria documentar o header X-Total-Count.\n{body}");
+        Assert.True(headers.TryGetProperty("Link", out _), $"deveria documentar o header Link.\n{body}");
     }
 }

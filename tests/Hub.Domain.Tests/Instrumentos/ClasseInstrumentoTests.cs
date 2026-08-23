@@ -28,4 +28,24 @@ public sealed class ClasseInstrumentoTests
         Assert.True(result.IsFailure);
         Assert.Equal(InstrumentoErrors.ClasseInvalida, result.Error);
     }
+
+    [Fact]
+    public void CampoPosicao_ParaTd_DeveSerPuVenda()
+    {
+        Assert.Equal("pu_venda", ClasseInstrumento.Td.CampoPosicao);
+    }
+
+    [Theory]
+    [MemberData(nameof(ClassesSemRegraDefinida))]
+    public void CampoPosicao_ParaClassesSemRegraDefinida_DeveSerNulo(ClasseInstrumento classe)
+    {
+        Assert.Null(classe.CampoPosicao);
+    }
+
+    public static IEnumerable<object[]> ClassesSemRegraDefinida()
+    {
+        yield return [ClasseInstrumento.Acao];
+        yield return [ClasseInstrumento.Cripto];
+        yield return [ClasseInstrumento.Manual];
+    }
 }
