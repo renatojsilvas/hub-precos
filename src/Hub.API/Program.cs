@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Prometheus;
 using Hub.API;
+using Hub.API.Endpoints;
 using Hub.API.Extensions;
 using Hub.Application;
 using Hub.Domain.Common;
@@ -38,6 +39,11 @@ app.UseSwaggerUI();
 app.MapHealthChecks("/health");
 app.MapHealthChecks("/health/ready");
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
+
+var v1 = app.MapGroup("/v1");
+v1.MapPricesEndpoints();
+v1.MapInstrumentsEndpoints();
+
 app.MapMetrics();
 
 if (app.Environment.IsEnvironment("Testing"))

@@ -1,4 +1,3 @@
-using System.Text.Json.Nodes;
 using Hub.Domain.Fontes;
 using Hub.Domain.Instrumentos;
 using Hub.Domain.Precos;
@@ -32,7 +31,7 @@ public sealed class EfRoundTripTests
             ativoDesde: new DateOnly(2026, 1, 1),
             ativoAte: new DateOnly(2030, 1, 1),
             pagaCupom: true,
-            metadados: """{"chave":"valor"}""",
+            metadados: Metadados.Create("""{"chave":"valor"}""").Value,
             criadoEm: criadoEm).Value;
 
         db.Instrumentos.Add(instrumento);
@@ -48,10 +47,7 @@ public sealed class EfRoundTripTests
         Assert.Equal(instrumento.AtivoDesde, lido.AtivoDesde);
         Assert.Equal(instrumento.AtivoAte, lido.AtivoAte);
         Assert.Equal(instrumento.PagaCupom, lido.PagaCupom);
-        Assert.True(
-            JsonNode.DeepEquals(JsonNode.Parse(instrumento.Metadados), JsonNode.Parse(lido.Metadados)),
-            $"metadados divergiu no round-trip: salvo '{instrumento.Metadados}', lido '{lido.Metadados}' " +
-            "(jsonb do Postgres reformata o texto, então a comparação é estrutural, não literal).");
+        Assert.Equal(instrumento.Metadados, lido.Metadados);
         Assert.Equal(instrumento.CriadoEm, lido.CriadoEm);
     }
 
@@ -68,7 +64,7 @@ public sealed class EfRoundTripTests
             ativoDesde: null,
             ativoAte: null,
             pagaCupom: false,
-            metadados: "{}",
+            metadados: Metadados.Create("{}").Value,
             criadoEm: DateTimeOffset.UtcNow).Value;
 
         db.Instrumentos.Add(instrumento);
@@ -104,7 +100,7 @@ public sealed class EfRoundTripTests
             ativoDesde: null,
             ativoAte: null,
             pagaCupom: false,
-            metadados: "{}",
+            metadados: Metadados.Create("{}").Value,
             criadoEm: DateTimeOffset.UtcNow).Value;
 
         db.Instrumentos.Add(instrumento);

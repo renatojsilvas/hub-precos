@@ -188,110 +188,108 @@ public sealed class IngerirPrecosTdCommandHandler(
             var instrumentoTruncado = false;
             var falhaDeGravacao = false;
 
-            try
+            await foreach (var lido in adapter.FetchAsync(wm.CodigoNaFonte, dataInicio, ct))
             {
-                await foreach (var lido in adapter.FetchAsync(wm.CodigoNaFonte, dataInicio, ct))
+                if (ct.IsCancellationRequested)
                 {
-                    if (lido.Preco.IsFailure)
+                    logger.LogInformation(
+                        "Ciclo de ingestão TD cancelado durante o processamento de {InstrumentoId}; " +
+                        "lote pendente descartado, dados já commitados preservados.",
+                        wm.InstrumentoId);
+                    break;
+                }
+
+                if (lido.Preco.IsFailure)
+                {
+                    linhasComErro++;
+                    logger.LogWarning(
+                        "Linha rejeitada na ingestão TD para {InstrumentoId} (linha {Linha}): {Code} - {Description}",
+                        wm.InstrumentoId, lido.Linha, lido.Preco.Error.Code, lido.Preco.Error.Description);
+
+                    if (lido.Preco.Error.Code == AdapterErrors.TdApiHttpError.Code
+                        || lido.Preco.Error.Code == AdapterErrors.TdApiRespostaInvalida.Code)
                     {
-                        linhasComErro++;
+                        instrumentoTruncado = true;
+                    }
+
+                    continue;
+                }
+
+                var po = lido.Preco.Value;
+                var valor = Math.Round(po.Valor, 6, MidpointRounding.ToEven);
+                var chave = (po.DataRef.Value, po.Campo.Value);
+
+                int revisao;
+                if (!revisoes.TryGetValue(chave, out var corrente))
+                {
+                    revisao = 0;
+                }
+                else if (corrente.Valor == valor)
+                {
+                    precosInalterados++;
+                    continue;
+                }
+                else
+                {
+                    revisao = corrente.Revisao + 1;
+                }
+
+                var precoResult = Preco.Create(
+                    po.InstrumentoId, po.DataRef, po.Campo, po.Fonte, valor, revisao, po.ObservadoEm);
+
+                if (precoResult.IsFailure)
+                {
+                    precosRejeitados++;
+                    logger.LogWarning(
+                        "Preço rejeitado para {InstrumentoId} {DataRef} {Campo}: {Description}",
+                        po.InstrumentoId.Value, po.DataRef.Value, po.Campo.Value, precoResult.Error.Description);
+                    continue;
+                }
+
+                precosPendentes.Add(precoResult.Value);
+                revisoes[chave] = new RevisaoCorrente(revisao, valor);
+
+                if (revisao > 0)
+                {
+                    precosRevisados++;
+                }
+                else
+                {
+                    precosInseridos++;
+                }
+
+                var emitir = revisao > 0
+                    || (wm.Watermark is not null && po.DataRef.Value >= hoje.AddDays(-janelaDelta));
+
+                if (emitir)
+                {
+                    var eventoOutbox = EventosFactory.ParaPrecoObservado(po, revisao);
+                    var mensagemResult = OutboxMessage.Create(
+                        eventoOutbox.Tipo, eventoOutbox.RoutingKey, eventoOutbox.Payload, timeProvider.GetUtcNow());
+
+                    if (mensagemResult.IsFailure)
+                    {
                         logger.LogWarning(
-                            "Linha rejeitada na ingestão TD para {InstrumentoId} (linha {Linha}): {Code} - {Description}",
-                            wm.InstrumentoId, lido.Linha, lido.Preco.Error.Code, lido.Preco.Error.Description);
-
-                        if (lido.Preco.Error.Code == AdapterErrors.TdApiHttpError.Code
-                            || lido.Preco.Error.Code == AdapterErrors.TdApiRespostaInvalida.Code)
-                        {
-                            instrumentoTruncado = true;
-                        }
-
-                        continue;
-                    }
-
-                    var po = lido.Preco.Value;
-                    var valor = Math.Round(po.Valor, 6, MidpointRounding.ToEven);
-                    var chave = (po.DataRef.Value, po.Campo.Value);
-
-                    int revisao;
-                    if (!revisoes.TryGetValue(chave, out var corrente))
-                    {
-                        revisao = 0;
-                    }
-                    else if (corrente.Valor == valor)
-                    {
-                        precosInalterados++;
-                        continue;
+                            "Falha ao criar mensagem de outbox para {InstrumentoId} {DataRef} {Campo}: {Description}",
+                            po.InstrumentoId.Value, po.DataRef.Value, po.Campo.Value, mensagemResult.Error.Description);
                     }
                     else
                     {
-                        revisao = corrente.Revisao + 1;
-                    }
-
-                    var precoResult = Preco.Create(
-                        po.InstrumentoId, po.DataRef, po.Campo, po.Fonte, valor, revisao, po.ObservadoEm);
-
-                    if (precoResult.IsFailure)
-                    {
-                        precosRejeitados++;
-                        logger.LogWarning(
-                            "Preço rejeitado para {InstrumentoId} {DataRef} {Campo}: {Description}",
-                            po.InstrumentoId.Value, po.DataRef.Value, po.Campo.Value, precoResult.Error.Description);
-                        continue;
-                    }
-
-                    precosPendentes.Add(precoResult.Value);
-                    revisoes[chave] = new RevisaoCorrente(revisao, valor);
-
-                    if (revisao > 0)
-                    {
-                        precosRevisados++;
-                    }
-                    else
-                    {
-                        precosInseridos++;
-                    }
-
-                    var emitir = revisao > 0
-                        || (wm.Watermark is not null && po.DataRef.Value >= hoje.AddDays(-janelaDelta));
-
-                    if (emitir)
-                    {
-                        var eventoOutbox = EventosFactory.ParaPrecoObservado(po, revisao);
-                        var mensagemResult = OutboxMessage.Create(
-                            eventoOutbox.Tipo, eventoOutbox.RoutingKey, eventoOutbox.Payload, timeProvider.GetUtcNow());
-
-                        if (mensagemResult.IsFailure)
-                        {
-                            logger.LogWarning(
-                                "Falha ao criar mensagem de outbox para {InstrumentoId} {DataRef} {Campo}: {Description}",
-                                po.InstrumentoId.Value, po.DataRef.Value, po.Campo.Value, mensagemResult.Error.Description);
-                        }
-                        else
-                        {
-                            eventosPendentes.Add(mensagemResult.Value);
-                            eventosGerados++;
-                        }
-                    }
-
-                    if (precosPendentes.Count >= tamanhoLote)
-                    {
-                        var flushResult = await FlushAsync();
-                        if (flushResult.IsFailure)
-                        {
-                            LogFalhaDeGravacao(wm.InstrumentoId, flushResult.Error);
-                            falhaDeGravacao = true;
-                            break;
-                        }
+                        eventosPendentes.Add(mensagemResult.Value);
+                        eventosGerados++;
                     }
                 }
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                logger.LogInformation(
-                    "Ciclo de ingestão TD cancelado durante o processamento de {InstrumentoId}; " +
-                    "lote pendente descartado, dados já commitados preservados.",
-                    wm.InstrumentoId);
-                break;
+
+                if (precosPendentes.Count >= tamanhoLote)
+                {
+                    var flushResult = await FlushAsync();
+                    if (flushResult.IsFailure)
+                    {
+                        LogFalhaDeGravacao(wm.InstrumentoId, flushResult.Error);
+                        falhaDeGravacao = true;
+                        break;
+                    }
+                }
             }
 
             if (!falhaDeGravacao)

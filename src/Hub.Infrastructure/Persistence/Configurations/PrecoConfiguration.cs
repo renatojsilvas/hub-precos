@@ -63,5 +63,8 @@ public sealed class PrecoConfiguration : IEntityTypeConfiguration<Preco>
         builder.HasIndex(p => new { p.InstrumentoId, p.DataRef })
             .IsDescending(false, true)
             .HasDatabaseName("ix_precos_lookup");
+
+        builder.HasIndex(p => p.ObservadoEm)
+            .HasDatabaseName("ix_precos_observado_em");
     }
 }

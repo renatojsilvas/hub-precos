@@ -110,7 +110,9 @@ public sealed class TdApiAdapter(
             }
 
             var nomeExibicao = $"{titulo.TipoTitulo} {titulo.DataVencimento}";
-            var metadados = JsonSerializer.Serialize(new { indexador = titulo.Indexador, tipo = titulo.TipoTitulo });
+
+            var metadados = Metadados.Create(
+                JsonSerializer.Serialize(new { indexador = titulo.Indexador, tipo = titulo.TipoTitulo })).Value;
 
             var instrumentoOk = true;
 
