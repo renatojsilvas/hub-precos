@@ -45,17 +45,42 @@ respondendo".
 
 ---
 
-## O que vem depois
+## Próximos passos
 
-Estes **não** são tarefas acordadas — são os itens 2 a 5 da §9 do ARQUITETURA.md,
-listados aqui só para a fila não terminar no F5. Vire cada um em `F` quando for a vez.
+Redigidos no mesmo formato dos anteriores — copie o texto e cole na sessão. Seguem a
+ordem da §9 do ARQUITETURA.md, que é deliberada: cada etapa é utilizável sozinha e não
+exige retrabalho na seguinte.
 
-- **Relay outbox → RabbitMQ** (§4.4, item 2 da §9). A outbox já é escrita desde o F4;
-  falta quem a leia. Pronto: eventos do dia chegando a uma fila de teste.
-- **Operações + Custódia** (item 3). Primeiro consumidor real dos eventos e do `asof`.
-- **Custódia: snapshots e recálculo** (item 4).
-- **Corpactions** (item 5). Por último de propósito — é o tema mais sutil e tudo acima
-  funciona sem ele.
+- [ ] **F6** — implemente o relay outbox → RabbitMQ (seção 4.4 do ARQUITETURA.md):
+  compose com o broker, exchange `prices`, e o processo que lê `outbox` com
+  `publicado_em IS NULL` ordenado por `id`, publica com publisher confirms na
+  `routing_key` do registro e marca `publicado_em`. A garantia é at-least-once
+  (ADR-3): pode duplicar entre o publish e o update, nunca perder. **Pronto:**
+  eventos do dia chegando a uma fila de teste.
+
+- [ ] **F7** — Operações mínimo (`POST /operacoes` + outbox + `trades.registered`) e,
+  na Custódia, fila com handlers de `TradeRegistered` e `PriceObserved`, livro, posição
+  corrente e bootstrap da projeção via REST (seção 9, item 3). **Pronto:** aplicação
+  registrada via Operações aparecendo no livro por evento, e preço do dia chegando por
+  push.
+
+- [ ] **F8** — Custódia: handler de `eod.ready`, worker da seção 7.4 (gatilhos 1 e 2) e
+  extratos (item 4). **Pronto:** fluxo 2 retroativo e fluxo 5 funcionando ponta a ponta.
+
+- [ ] **F9** — corpactions: gerador determinístico no Hub (cupom e vencimento) e
+  tradução em movimentos com dedupe (item 5). Por último de propósito — é o tema mais
+  sutil e tudo acima funciona sem ele. Comece o enum com o que as carteiras reais têm
+  (compra, venda, cupom, resgate), não com a taxonomia completa da B3 no dia 1.
+
+**Antes do F7, resolva duas dívidas** que só mordem quando existir consumidor de
+verdade, ambas registradas na memória do projeto com motivo e alternativas:
+
+1. O Hub só roda em **uma réplica** enquanto o Quartz usar store em memória —
+   `[DisallowConcurrentExecution]` vale por processo.
+2. A API key é **uma só para todos os consumidores**. Quando Custódia e Operações
+   chegarem, as duas usam a mesma chave, sem como auditar quem chamou nem revogar
+   uma sem revogar a outra. A tabela de client keys do molde está como ausência
+   decidida — introduzi-la **depois** que houver integrador é breaking change.
 
 ---
 
