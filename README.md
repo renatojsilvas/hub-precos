@@ -250,6 +250,13 @@ Botão de reparo: apagar os preços de um instrumento força o re-backfill dele 
 seguinte, porque o watermark é derivado de `MAX(data_ref)` e não existe como coluna
 (ADR-5). Não há estado de progresso para limpar junto.
 
+**Linha `EodPricesReady` da outbox não é podável.** Quando existir poda de outbox, ela
+precisa excluir `tipo = 'EodPricesReady'`. A dedupe do EOD deriva de ler a própria
+outbox — a linha **é** o fato "já anunciei o dia D" —, então apagá-la faz o dia ser
+reemitido. São ~365 linhas por ano; o custo de guardar é irrelevante perto do de
+descobrir isso depois. Não há poda implementada hoje: isto é decisão registrada em
+antecedência, não conserto.
+
 Segredos necessários em `Settings → Secrets and variables → Actions`: `VPS_HOST`,
 `VPS_USER`, `VPS_SSH_KEY` (chave privada dedicada ao deploy, não a pessoal),
 `HUB_APP_PASSWORD` (senha da role `hub` no cluster compartilhado — distinta da do
