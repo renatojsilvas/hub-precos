@@ -140,6 +140,82 @@
         { "expr": "rate(dotnet_collection_count_total{job=\"hub-precos\"}[5m])", "legendFormat": "gen {{generation}}", "refId": "A" }
       ],
       "fieldConfig": { "defaults": { "unit": "ops", "custom": { "fillOpacity": 0 } }, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "Frescor da ingestão",
+      "description": "Segundos desde o último ciclo de ingestão TD bem-sucedido. Sucesso aqui só significa que o ciclo terminou sem erro — não que trouxe dado novo (veja o painel de último preço novo). Thresholds: 900s (15min, um ciclo perdido) e 3600s (1h, o gatilho do alerta Hub — Dado parado).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 27 },
+      "targets": [
+        { "expr": "time() - hub_ingestao_ultimo_sucesso_timestamp_seconds{job=\"hub-precos\"}", "legendFormat": "frescor", "refId": "A" }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 900 }, { "color": "red", "value": 3600 }] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Último preço novo",
+      "description": "Segundos desde o último ciclo que efetivamente inseriu ou revisou algum preço. Pega a classe de falha que o painel de frescor não pega: upstream responde 200, o ciclo é \"sucesso\", mas nada de novo entra — dado velho disfarçado de ingestão saudável.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 27 },
+      "targets": [
+        { "expr": "time() - hub_ingestao_ultimo_preco_novo_timestamp_seconds{job=\"hub-precos\"}", "legendFormat": "sem preço novo há", "refId": "A" }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 900 }, { "color": "red", "value": 3600 }] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Instrumentos com falha",
+      "description": "Total acumulado de instrumentos com falha nos ciclos de ingestão TD. Hoje falha parcial dentro de um ciclo \"success\" é invisível nos logs de resumo — este contador é o único jeito de ver.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 27 },
+      "targets": [
+        { "expr": "increase(hub_ingestao_instrumentos_falha_total{job=\"hub-precos\"}[24h])", "legendFormat": "falhas (24h)", "refId": "A" }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Ciclos de ingestão por desfecho",
+      "description": "Contagem de ciclos success/failure por hora. O alerta Hub — Falha de ingestão dispara acima de 3 falhas na última hora (metade dos 4 ciclos/hora do cron de 15min).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 31 },
+      "targets": [
+        { "expr": "sum by (outcome) (increase(hub_ingestao_ciclos_total{job=\"hub-precos\"}[1h]))", "legendFormat": "{{outcome}}", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 10 } }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Preços processados por tipo",
+      "description": "Preços inseridos/revisados/inalterados/rejeitados nas últimas 24h. inalterado dominando o gráfico é normal fora de dia útil; inserido/revisado zerados por muitas horas seguidas é o sinal a observar.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 31 },
+      "targets": [
+        { "expr": "sum by (tipo) (increase(hub_ingestao_precos_processados_total{job=\"hub-precos\"}[24h]))", "legendFormat": "{{tipo}}", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 10 } }, "overrides": [] }
     }
   ]
 }

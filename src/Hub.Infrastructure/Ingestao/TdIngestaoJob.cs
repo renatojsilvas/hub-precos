@@ -30,10 +30,18 @@ public sealed class TdIngestaoJob(ISender sender, ILogger<TdIngestaoJob> logger,
                 result.Value.EventosGerados, result.Value.EodEmitido);
 
             metrics.RecordCicloIngestao("success");
+            metrics.RecordIngestaoSucesso();
             metrics.RecordPrecosProcessados("inserido", result.Value.PrecosInseridos);
             metrics.RecordPrecosProcessados("revisado", result.Value.PrecosRevisados);
             metrics.RecordPrecosProcessados("inalterado", result.Value.PrecosInalterados);
             metrics.RecordPrecosProcessados("rejeitado", result.Value.PrecosRejeitados);
+
+            if (result.Value.PrecosInseridos + result.Value.PrecosRevisados > 0)
+            {
+                metrics.RecordPrecoNovo();
+            }
+
+            metrics.RecordInstrumentosComFalha(result.Value.InstrumentosComFalha);
         }
         else
         {
