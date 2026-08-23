@@ -1,6 +1,8 @@
 using Dapper;
+using Hub.Application.Common;
 using Hub.Application.Precos;
 using Hub.Domain.Common;
+using Hub.Domain.Instrumentos;
 using Npgsql;
 
 namespace Hub.Infrastructure.Persistence.Repositories;
@@ -61,12 +63,13 @@ public sealed class PrecosAsOfReadRepository(NpgsqlDataSource dataSource) : IPre
         return Result<int>.Success(total);
     }
 
-    public async Task<Result<IReadOnlyList<CatalogoInstrumento>>> ObterPaginaDoCatalogoAsync(int skip, int take, CancellationToken ct)
+    public async Task<Result<IReadOnlyList<CatalogoInstrumento>>> ObterPaginaDoCatalogoAsync(Paginacao paginacao, CancellationToken ct)
     {
         await using var connection = await dataSource.OpenConnectionAsync(ct);
 
         var rows = await connection.QueryAsync<CatalogoInstrumento>(
-            new CommandDefinition(SqlPaginaCatalogo, new { skip, take }, cancellationToken: ct));
+            new CommandDefinition(
+                SqlPaginaCatalogo, new { skip = paginacao.Skip, take = paginacao.Take }, cancellationToken: ct));
 
         IReadOnlyList<CatalogoInstrumento> pagina = rows.ToList();
 
@@ -74,14 +77,14 @@ public sealed class PrecosAsOfReadRepository(NpgsqlDataSource dataSource) : IPre
     }
 
     public async Task<Result<IReadOnlyDictionary<string, AsOfInstrumento>>> ObterAsOfAsync(
-        IReadOnlyList<string> instrumentoIds, DateOnly data, CancellationToken ct)
+        IReadOnlyList<InstrumentoId> instrumentoIds, DateOnly data, CancellationToken ct)
     {
         await using var connection = await dataSource.OpenConnectionAsync(ct);
 
         var rows = await connection.QueryAsync<AsOfRow>(
             new CommandDefinition(
                 SqlAsOf,
-                new { instrumentoIds = instrumentoIds.ToArray(), data },
+                new { instrumentoIds = instrumentoIds.Select(id => id.Value).ToArray(), data },
                 cancellationToken: ct));
 
         IReadOnlyDictionary<string, AsOfInstrumento> resultado = rows

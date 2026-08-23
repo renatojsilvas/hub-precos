@@ -14,7 +14,15 @@ public static class PaginationDefaults
         return (normalizedPage, normalizedPageSize);
     }
 
-    public static int ComputeSkip(int page, int pageSize, int total)
+    public static Paginacao Criar(int? page, int? pageSize, int total)
+    {
+        var (normalizedPage, normalizedPageSize) = Normalize(page, pageSize);
+        var skip = ComputeSkip(normalizedPage, normalizedPageSize, total);
+
+        return Paginacao.Criar(skip, normalizedPageSize);
+    }
+
+    private static int ComputeSkip(int page, int pageSize, int total)
     {
         var skip = (long)(page - 1) * pageSize;
 

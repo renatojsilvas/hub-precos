@@ -1,4 +1,5 @@
 using Dapper;
+using Hub.Application.Common;
 using Hub.Application.Precos;
 using Hub.Domain.Fontes;
 using Hub.Domain.Instrumentos;
@@ -37,6 +38,8 @@ public sealed class PrecosAsOfReadRepositoryIntegrationTests
     {
         _factory = factory;
     }
+
+    private static InstrumentoId Id(string value) => InstrumentoId.Create(value).Value;
 
     private async Task<Instrumento> CriarInstrumentoAsync(AppDbContext db, string id)
     {
@@ -96,7 +99,7 @@ public sealed class PrecosAsOfReadRepositoryIntegrationTests
         await RegistrarPrecoAsync(db, existente.Id, new DateOnly(2026, 8, 10), "pu_venda", "td-api", 0, 100m);
 
         var resultado = await repo.ObterAsOfAsync(
-            ["td:asof-existente-1", "td:asof-nao-cadastrado-1"], new DateOnly(2026, 8, 14), CancellationToken.None);
+            [Id("td:asof-existente-1"), Id("td:asof-nao-cadastrado-1")], new DateOnly(2026, 8, 14), CancellationToken.None);
 
         Assert.True(resultado.IsSuccess);
         Assert.True(resultado.Value["td:asof-existente-1"].Existe);
@@ -115,7 +118,7 @@ public sealed class PrecosAsOfReadRepositoryIntegrationTests
         await RegistrarPrecoAsync(db, instrumento.Id, new DateOnly(2026, 8, 20), "pu_venda", "td-api", 0, 100m);
 
         var resultado = await repo.ObterAsOfAsync(
-            ["td:asof-sem-preco-1"], new DateOnly(2026, 8, 14), CancellationToken.None);
+            [Id("td:asof-sem-preco-1")], new DateOnly(2026, 8, 14), CancellationToken.None);
 
         Assert.True(resultado.IsSuccess);
         var item = resultado.Value["td:asof-sem-preco-1"];
@@ -136,7 +139,7 @@ public sealed class PrecosAsOfReadRepositoryIntegrationTests
         await RegistrarPrecoAsync(db, instrumento.Id, new DateOnly(2026, 8, 20), "pu_venda", "td-api", 0, 999m);
 
         var resultado = await repo.ObterAsOfAsync(
-            ["td:asof-forward-fill-1"], new DateOnly(2026, 8, 14), CancellationToken.None);
+            [Id("td:asof-forward-fill-1")], new DateOnly(2026, 8, 14), CancellationToken.None);
 
         Assert.True(resultado.IsSuccess);
         var item = resultado.Value["td:asof-forward-fill-1"];
@@ -157,7 +160,7 @@ public sealed class PrecosAsOfReadRepositoryIntegrationTests
         await RegistrarPrecoAsync(db, instrumento.Id, new DateOnly(2026, 8, 10), "pu_venda", "td-api", 1, 200m);
 
         var resultado = await repo.ObterAsOfAsync(
-            ["td:asof-revisao-1"], new DateOnly(2026, 8, 14), CancellationToken.None);
+            [Id("td:asof-revisao-1")], new DateOnly(2026, 8, 14), CancellationToken.None);
 
         Assert.True(resultado.IsSuccess);
         var campo = Assert.Single(resultado.Value["td:asof-revisao-1"].Campos);
@@ -184,7 +187,7 @@ public sealed class PrecosAsOfReadRepositoryIntegrationTests
             observadoEm: new DateTimeOffset(2026, 8, 10, 15, 0, 0, TimeSpan.Zero));
 
         var resultado = await repo.ObterAsOfAsync(
-            ["td:asof-desempate-fonte-1"], new DateOnly(2026, 8, 14), CancellationToken.None);
+            [Id("td:asof-desempate-fonte-1")], new DateOnly(2026, 8, 14), CancellationToken.None);
 
         Assert.True(resultado.IsSuccess);
         var campo = Assert.Single(resultado.Value["td:asof-desempate-fonte-1"].Campos);
@@ -210,7 +213,7 @@ public sealed class PrecosAsOfReadRepositoryIntegrationTests
             observadoEm: new DateTimeOffset(2026, 8, 10, 9, 0, 0, TimeSpan.Zero));
 
         var resultado = await repo.ObterAsOfAsync(
-            ["td:asof-desempate-revisao-1"], new DateOnly(2026, 8, 14), CancellationToken.None);
+            [Id("td:asof-desempate-revisao-1")], new DateOnly(2026, 8, 14), CancellationToken.None);
 
         Assert.True(resultado.IsSuccess);
         var campo = Assert.Single(resultado.Value["td:asof-desempate-revisao-1"].Campos);
@@ -234,7 +237,7 @@ public sealed class PrecosAsOfReadRepositoryIntegrationTests
         await RegistrarPrecoAsync(db, instrumento.Id, dataRefPuVenda, "pu_venda", "td-api", 0, 100m);
         await RegistrarPrecoAsync(db, instrumento.Id, dataRefTaxaVenda, "taxa_venda", "td-api", 0, 6.18m);
 
-        var resultado = await repo.ObterAsOfAsync(["td:asof-dessincronizado-1"], dataPedida, CancellationToken.None);
+        var resultado = await repo.ObterAsOfAsync([Id("td:asof-dessincronizado-1")], dataPedida, CancellationToken.None);
 
         Assert.True(resultado.IsSuccess);
         var item = resultado.Value["td:asof-dessincronizado-1"];
@@ -262,7 +265,7 @@ public sealed class PrecosAsOfReadRepositoryIntegrationTests
         await RegistrarPrecoAsync(db, instrumento.Id, dataRef, "taxa_venda", "td-api", 0, 6.18m);
 
         var resultado = await repo.ObterAsOfAsync(
-            ["td:asof-multi-campo-1"], new DateOnly(2026, 8, 14), CancellationToken.None);
+            [Id("td:asof-multi-campo-1")], new DateOnly(2026, 8, 14), CancellationToken.None);
 
         Assert.True(resultado.IsSuccess);
         var campos = resultado.Value["td:asof-multi-campo-1"].Campos;
@@ -292,7 +295,7 @@ public sealed class PrecosAsOfReadRepositoryIntegrationTests
             "SELECT COUNT(*) FROM instrumentos WHERE id < @id", new { id = $"{prefixo}-a" });
         await conexao.DisposeAsync();
 
-        var pagina = await repo.ObterPaginaDoCatalogoAsync(posicao, 3, CancellationToken.None);
+        var pagina = await repo.ObterPaginaDoCatalogoAsync(Paginacao.Criar(posicao, 3), CancellationToken.None);
         Assert.True(pagina.IsSuccess);
         Assert.Equal(
             [$"{prefixo}-a", $"{prefixo}-b", $"{prefixo}-c"],
@@ -366,7 +369,7 @@ public sealed class PrecosAsOfReadRepositoryIntegrationTests
         var repo = new PrecosAsOfReadRepository(dataSourceQuebrado);
 
         var excecao = await Record.ExceptionAsync(() =>
-            repo.ObterAsOfAsync(["td:x"], new DateOnly(2026, 8, 14), CancellationToken.None));
+            repo.ObterAsOfAsync([Id("td:x")], new DateOnly(2026, 8, 14), CancellationToken.None));
 
         Assert.NotNull(excecao);
     }
@@ -388,7 +391,7 @@ public sealed class PrecosAsOfReadRepositoryIntegrationTests
         await using var dataSourceQuebrado = CriarDataSourceComConexaoQueFalha();
         var repo = new PrecosAsOfReadRepository(dataSourceQuebrado);
 
-        var excecao = await Record.ExceptionAsync(() => repo.ObterPaginaDoCatalogoAsync(0, 10, CancellationToken.None));
+        var excecao = await Record.ExceptionAsync(() => repo.ObterPaginaDoCatalogoAsync(Paginacao.Criar(0, 10), CancellationToken.None));
 
         Assert.NotNull(excecao);
     }

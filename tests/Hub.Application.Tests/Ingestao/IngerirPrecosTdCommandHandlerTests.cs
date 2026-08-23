@@ -580,7 +580,7 @@ public sealed class IngerirPrecosTdCommandHandlerTests
         var erro = new Error("Revisoes.Erro", "falhou");
         var read = new FakeIngestaoReadRepository(
             watermarksResult: Result<IReadOnlyList<WatermarkInstrumento>>.Success([wmA, wmB, wmC]),
-            revisoesPorInstrumento: instrumentoId => instrumentoId == "td:b"
+            revisoesPorInstrumento: instrumentoId => instrumentoId.Value == "td:b"
                 ? Result<IReadOnlyDictionary<(DateOnly, string), RevisaoCorrente>>.Failure(erro)
                 : Result<IReadOnlyDictionary<(DateOnly, string), RevisaoCorrente>>.Success(
                     new Dictionary<(DateOnly, string), RevisaoCorrente>()));
@@ -596,6 +596,52 @@ public sealed class IngerirPrecosTdCommandHandlerTests
         Assert.Equal(1, resultado.Value.InstrumentosComFalha);
         Assert.Equal(2, precoWrite.Adicionados.Count);
         Assert.DoesNotContain(adapter.FetchCalls, c => c.Codigo == "cod-b");
+    }
+
+    [Fact]
+    public async Task Handle_WatermarkComInstrumentoIdMalformado_DegradaParcialmenteEContinuaOsDemais()
+    {
+        var watermark = new DateOnly(2026, 8, 15);
+        var wmA = new WatermarkInstrumento("td:a", "cod-a", watermark, null);
+        var wmB = new WatermarkInstrumento("lixo-sem-prefixo", "cod-b", watermark, null);
+        var wmC = new WatermarkInstrumento("td:c", "cod-c", watermark, null);
+
+        var dataRef = new DateOnly(2026, 8, 20);
+        var precoA = CriarPriceObserved("td:a", dataRef, Campos.PuVenda, 100m);
+        var precoC = CriarPriceObserved("td:c", dataRef, Campos.PuVenda, 300m);
+
+        var adapter = new FakePriceSourceAdapter(
+            Result<DiscoveryResultado>.Success(new DiscoveryResultado(true, 0, 0, 0)),
+            (codigo, _, _) => codigo switch
+            {
+                "cod-a" => Como([precoA]),
+                "cod-c" => Como([precoC]),
+                _ => Como([]),
+            });
+
+        var read = new FakeIngestaoReadRepository(
+            watermarksResult: Result<IReadOnlyList<WatermarkInstrumento>>.Success([wmA, wmB, wmC]));
+
+        var precoWrite = new FakePrecoWriteRepository();
+        var outboxWrite = new FakeOutboxWriteRepository();
+        var unitOfWork = new FakeUnitOfWork();
+        var logger = new FakeLogger<IngerirPrecosTdCommandHandler>();
+        var handler = CriarHandler(adapter, read, precoWrite, outboxWrite, unitOfWork, logger: logger);
+
+        var resultado = await handler.Handle(new IngerirPrecosTdCommand(), CancellationToken.None);
+
+        // Antes desta mudança, InstrumentoId.Create(wm.InstrumentoId).Value era chamado sem checar
+        // IsFailure: um watermark com id corrompido derrubava o InvalidOperationException do Result.Value
+        // sem tratamento, abortando o foreach inteiro e deixando os instrumentos seguintes sem ingestão
+        // neste ciclo. Com o guard, só o instrumento malformado é pulado.
+        Assert.True(resultado.IsSuccess);
+        Assert.Equal(1, resultado.Value.InstrumentosComFalha);
+        Assert.Equal(2, precoWrite.Adicionados.Count);
+        Assert.DoesNotContain(adapter.FetchCalls, c => c.Codigo == "cod-b");
+        Assert.Contains(
+            logger.Entries,
+            e => e.Level == LogLevel.Warning
+                && e.Message.Contains("lixo-sem-prefixo", StringComparison.Ordinal));
     }
 
     [Fact]

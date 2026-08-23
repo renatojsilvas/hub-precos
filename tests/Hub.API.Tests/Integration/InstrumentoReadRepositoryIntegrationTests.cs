@@ -1,3 +1,4 @@
+using Hub.Application.Common;
 using Hub.Application.Instrumentos;
 using Hub.Domain.Instrumentos;
 using Hub.Infrastructure.Persistence;
@@ -54,7 +55,7 @@ public sealed class InstrumentoReadRepositoryIntegrationTests
         await CriarInstrumentoAsync(db, $"{prefixo}-c");
 
         var pagina = await repo.ObterPaginaDoCatalogoAsync(
-            classe: null, busca: prefixo, skip: 0, take: 10, CancellationToken.None);
+            classe: null, busca: prefixo, paginacao: Paginacao.Criar(0, 10), CancellationToken.None);
 
         Assert.True(pagina.IsSuccess);
         Assert.Equal(
@@ -62,7 +63,7 @@ public sealed class InstrumentoReadRepositoryIntegrationTests
             pagina.Value.Select(x => x.Id));
 
         var meio = await repo.ObterPaginaDoCatalogoAsync(
-            classe: null, busca: prefixo, skip: 1, take: 1, CancellationToken.None);
+            classe: null, busca: prefixo, paginacao: Paginacao.Criar(1, 1), CancellationToken.None);
 
         Assert.Equal([$"{prefixo}-b"], meio.Value.Select(x => x.Id));
     }
@@ -79,7 +80,7 @@ public sealed class InstrumentoReadRepositoryIntegrationTests
         await CriarInstrumentoAsync(db, $"acao:instr-classe-acao-{sufixo}");
 
         var pagina = await repo.ObterPaginaDoCatalogoAsync(
-            classe: "td", busca: sufixo, skip: 0, take: 10, CancellationToken.None);
+            classe: ClasseInstrumento.Td, busca: sufixo, paginacao: Paginacao.Criar(0, 10), CancellationToken.None);
 
         Assert.True(pagina.IsSuccess);
         var item = Assert.Single(pagina.Value);
@@ -101,15 +102,15 @@ public sealed class InstrumentoReadRepositoryIntegrationTests
         await CriarInstrumentoAsync(db, idComTermoNoNome, nomeExibicao: $"Contém SELIC-BUSCA no nome {sufixo}");
 
         var porId = await repo.ObterPaginaDoCatalogoAsync(
-            classe: null, busca: $"selic-busca-id-{sufixo}", skip: 0, take: 10, CancellationToken.None);
+            classe: null, busca: $"selic-busca-id-{sufixo}", paginacao: Paginacao.Criar(0, 10), CancellationToken.None);
         Assert.Equal([idComTermoNoId], porId.Value.Select(x => x.Id));
 
         var porNomeMinusculo = await repo.ObterPaginaDoCatalogoAsync(
-            classe: null, busca: $"selic-busca no nome {sufixo}", skip: 0, take: 10, CancellationToken.None);
+            classe: null, busca: $"selic-busca no nome {sufixo}", paginacao: Paginacao.Criar(0, 10), CancellationToken.None);
         Assert.Equal([idComTermoNoNome], porNomeMinusculo.Value.Select(x => x.Id));
 
         var porNomeMaiusculo = await repo.ObterPaginaDoCatalogoAsync(
-            classe: null, busca: $"SELIC-BUSCA NO NOME {sufixo}".ToUpperInvariant(), skip: 0, take: 10, CancellationToken.None);
+            classe: null, busca: $"SELIC-BUSCA NO NOME {sufixo}".ToUpperInvariant(), paginacao: Paginacao.Criar(0, 10), CancellationToken.None);
         Assert.Equal([idComTermoNoNome], porNomeMaiusculo.Value.Select(x => x.Id));
     }
 
@@ -130,7 +131,7 @@ public sealed class InstrumentoReadRepositoryIntegrationTests
         await CriarInstrumentoAsync(db, idNulo, ativoAte: null);
 
         var pagina = await repo.ObterPaginaDoCatalogoAsync(
-            classe: null, busca: sufixo, skip: 0, take: 10, CancellationToken.None);
+            classe: null, busca: sufixo, paginacao: Paginacao.Criar(0, 10), CancellationToken.None);
 
         var porId = pagina.Value.ToDictionary(x => x.Id);
         Assert.True(porId[idPassado].Vencido);
@@ -152,11 +153,11 @@ public sealed class InstrumentoReadRepositoryIntegrationTests
         await CriarInstrumentoAsync(db, idSemPorcento);
 
         var comPorcento = await repo.ObterPaginaDoCatalogoAsync(
-            classe: null, busca: $"{sufixo}%", skip: 0, take: 10, CancellationToken.None);
+            classe: null, busca: $"{sufixo}%", paginacao: Paginacao.Criar(0, 10), CancellationToken.None);
         Assert.Equal([idComPorcentoLiteral], comPorcento.Value.Select(x => x.Id));
 
         var termoNormal = await repo.ObterPaginaDoCatalogoAsync(
-            classe: null, busca: sufixo, skip: 0, take: 10, CancellationToken.None);
+            classe: null, busca: sufixo, paginacao: Paginacao.Criar(0, 10), CancellationToken.None);
         Assert.Equal(
             new[] { idComPorcentoLiteral, idSemPorcento }.OrderBy(id => id, StringComparer.Ordinal),
             termoNormal.Value.Select(x => x.Id).OrderBy(id => id, StringComparer.Ordinal));
@@ -176,11 +177,11 @@ public sealed class InstrumentoReadRepositoryIntegrationTests
         await CriarInstrumentoAsync(db, idComQualquerCaractereNaMesmaPosicao);
 
         var comUnderscore = await repo.ObterPaginaDoCatalogoAsync(
-            classe: null, busca: $"{sufixo}_x", skip: 0, take: 10, CancellationToken.None);
+            classe: null, busca: $"{sufixo}_x", paginacao: Paginacao.Criar(0, 10), CancellationToken.None);
         Assert.Equal([idComUnderscoreLiteral], comUnderscore.Value.Select(x => x.Id));
 
         var termoNormal = await repo.ObterPaginaDoCatalogoAsync(
-            classe: null, busca: sufixo, skip: 0, take: 10, CancellationToken.None);
+            classe: null, busca: sufixo, paginacao: Paginacao.Criar(0, 10), CancellationToken.None);
         Assert.Equal(
             new[] { idComUnderscoreLiteral, idComQualquerCaractereNaMesmaPosicao }.OrderBy(id => id, StringComparer.Ordinal),
             termoNormal.Value.Select(x => x.Id).OrderBy(id => id, StringComparer.Ordinal));
@@ -201,7 +202,7 @@ public sealed class InstrumentoReadRepositoryIntegrationTests
         await CriarInstrumentoAsync(db, id, ativoAte: hoje);
 
         var pagina = await repo.ObterPaginaDoCatalogoAsync(
-            classe: null, busca: id, skip: 0, take: 10, CancellationToken.None);
+            classe: null, busca: id, paginacao: Paginacao.Criar(0, 10), CancellationToken.None);
 
         Assert.False(Assert.Single(pagina.Value).Vencido);
     }
@@ -217,7 +218,7 @@ public sealed class InstrumentoReadRepositoryIntegrationTests
         await CriarInstrumentoAsync(db, id, metadados: "{\"indexador\":\"Selic\",\"tipo\":\"Tesouro Selic\"}");
 
         var pagina = await repo.ObterPaginaDoCatalogoAsync(
-            classe: null, busca: id, skip: 0, take: 10, CancellationToken.None);
+            classe: null, busca: id, paginacao: Paginacao.Criar(0, 10), CancellationToken.None);
 
         var item = Assert.Single(pagina.Value);
         using var documento = System.Text.Json.JsonDocument.Parse(item.Metadados);
