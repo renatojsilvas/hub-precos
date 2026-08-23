@@ -77,7 +77,13 @@ justificativa registrada na memória.
   sem connection string a aplicação não sobe de jeito nenhum (isenta só `Testing`);
   sem API key ela sobe e o middleware fica fail-closed nas rotas de negócio, o que é
   útil localmente (isenta `Testing` e `Development`). Diferença deliberada — se
-  divergir, registre o porquê. Ref: `API/Extensions/{ConnectionStringGuard,ApiKeyGuard}.cs`
+  divergir, registre o porquê. A guarda de API key também rejeita chave abaixo de um
+  comprimento mínimo (32 caracteres), não só vazia — uma chave curta sobe sem
+  reclamação e não é menos perigosa que uma vazia — e rejeita placeholders conhecidos
+  (`CHANGE-ME-IN-PRODUCTION`, `dev-local-key`, e outros que apareçam na própria
+  documentação do repo), mesmo quando o valor configurado atinge o comprimento
+  mínimo: comprimento e conteúdo são camadas independentes, uma não substitui a
+  outra. Ref: `API/Extensions/{ConnectionStringGuard,ApiKeyGuard}.cs`
 
 ## 7. Observabilidade e operação
 
