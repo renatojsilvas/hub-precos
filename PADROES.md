@@ -39,6 +39,17 @@ justificativa registrada na memória.
 
 - CQRS leve: EF Core só na escrita; leituras em Dapper em ReadRepositories com SQL
   explícito. Ref: `Infrastructure/Persistence/Repositories/*ReadRepository.cs`
+- **Toda porta de repositório devolve `Result<T>` — leitura inclusive.** No repo de
+  referência isso é uniforme: `ITituloReadRepository` e `IPrecoTaxaReadRepository` têm
+  seis métodos entre os dois, todos `Task<Result<...>>`. Porta de leitura com tipo cru
+  não tem como reportar falha sem exceção, e força o chamador a escolher entre engolir
+  o erro ou usar try/catch de fluxo — os dois proibidos pela §9. A implementação vive
+  na Infrastructure, e é lá que exceção de infraestrutura vira `Result`; a Application
+  nunca captura. Ref: `src/TesouroDireto.Application/{Titulos,PrecosTaxas}/I*ReadRepository.cs`
+- Parâmetro de porta usa o **value object** onde ele existe (identidade e classificação),
+  e primitivo só onde não há VO — data usada como filtro ou relógio continua `DateOnly`,
+  termo de busca livre continua `string`. Ref: `ITituloWriteRepository.ExistsAsync(TipoTitulo,
+  DataVencimento, ct)` vs. `IPrecoTaxaReadRepository.GetByTituloIdAsync(Guid, DateOnly?, DateOnly?, ct)`
 - Migrations EF aplicadas no boot + seed idempotente.
 - Snake_case no banco; índices nomeados (`ix_tabela_colunas`); todo padrão de acesso
   novo exige índice correspondente na mesma migration.
