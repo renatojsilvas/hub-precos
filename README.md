@@ -260,11 +260,16 @@ antecedência, não conserto.
 Segredos necessários em `Settings → Secrets and variables → Actions`: `VPS_HOST`,
 `VPS_USER`, `VPS_SSH_KEY` (chave privada dedicada ao deploy, não a pessoal),
 `HUB_APP_PASSWORD` (senha da role `hub` no cluster compartilhado — distinta da do
-`.env` local, que é do container de desenvolvimento) e `HUB_API_KEY` (a chave que o
+`.env` local, que é do container de desenvolvimento), `HUB_API_KEY` (a chave que o
 Hub em produção exige de quem o chama via `X-Api-Key` — também distinta do valor do
 `.env` local; sem ela o job de deploy escreve `HUB_API_KEY` vazio no `.env` remoto, o
 que o próprio job detecta e recusa antes de subir o container, e mesmo que chegasse a
-subir o `ApiKeyGuard` derrubaria o boot em `Production`).
+subir o `ApiKeyGuard` derrubaria o boot em `Production`) e `TD_API_KEY` (a chave que o
+Hub em produção **envia** à TD API via `X-Api-Key` — direção oposta à `HUB_API_KEY`,
+sem relação com ela; sem esse secret o job de deploy recusa escrever o `.env` remoto e
+falha antes de subir o container, porque sem essa chave o job de ingestão dispara a
+cada 15 min e toda chamada à TD API recebe 401 — o Hub sobe healthy e serve listas
+vazias, sem erro visível de fora).
 
 O job falha cedo se a rede `tesouro-net` ou o container `tesouro-direto-db` não
 existirem, antes de construir imagem ou tocar em qualquer container.
