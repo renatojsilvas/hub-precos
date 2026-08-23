@@ -11,7 +11,7 @@ public static class PrecoErrors
         new("DataRef.Invalido", "DataRef não deve ser vazia.");
 
     public static readonly Error ValorInvalido =
-        new("Preco.ValorInvalido", "Valor deve ser maior que zero.");
+        new("Preco.ValorInvalido", "Valor deve ser maior que zero para campos que não são taxa.");
 
     public static readonly Error RevisaoInvalida =
         new("Preco.RevisaoInvalida", "Revisao não pode ser negativa.");
