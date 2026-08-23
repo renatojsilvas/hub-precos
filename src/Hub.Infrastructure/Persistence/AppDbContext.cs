@@ -1,8 +1,10 @@
 using Hub.Application.Common.Interfaces;
+using Hub.Domain.Common;
 using Hub.Domain.Instrumentos;
 using Hub.Domain.Outbox;
 using Hub.Domain.Precos;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Hub.Infrastructure.Persistence;
 
@@ -18,8 +20,28 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
     }
 
-    async Task IUnitOfWork.SaveChangesAsync(CancellationToken cancellationToken)
+    async Task<Result> IUnitOfWork.SaveChangesAsync(CancellationToken cancellationToken)
     {
-        await base.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await base.SaveChangesAsync(cancellationToken);
+            return Result.Success();
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is PostgresException pg
+            && pg.SqlState == PostgresErrorCodes.UniqueViolation)
+        {
+            foreach (var entry in ChangeTracker.Entries().Where(e => e.State != EntityState.Unchanged).ToList())
+            {
+                entry.State = EntityState.Detached;
+            }
+
+            return Result.Failure(DomainErrors.General.Conflict(
+                "Conflito de gravação: outra execução já persistiu um registro com a mesma chave nesta janela."));
+        }
+    }
+
+    void IUnitOfWork.LimparRastreamento()
+    {
+        ChangeTracker.Clear();
     }
 }

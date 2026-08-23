@@ -4,6 +4,7 @@ using System.Text.Json;
 using Hub.Application.Adapters;
 using Hub.Application.Common.Interfaces;
 using Hub.Application.Instrumentos;
+using Hub.Domain.Common;
 using Hub.Domain.Fontes;
 using Hub.Domain.Instrumentos;
 using Hub.Domain.Precos;
@@ -24,9 +25,11 @@ public sealed class TdApiAdapter(
     private const int JanelaBackfillAnosPadrao = 2;
     private const string DataFormat = "yyyy-MM-dd";
 
+    private static readonly DateOnly PisoProgramaPadrao = new(2002, 1, 7);
+
     public string Fonte => FonteTdApi;
 
-    public async Task DiscoverAsync(CancellationToken ct)
+    public async Task<Result<DiscoveryResultado>> DiscoverAsync(CancellationToken ct)
     {
         var titulosResult = await client.GetTitulosAsync(ct);
         if (titulosResult.IsFailure)
@@ -34,21 +37,21 @@ public sealed class TdApiAdapter(
             logger.LogError(
                 "Failed to discover titulos from TD API: {Code} - {Description}",
                 titulosResult.Error.Code, titulosResult.Error.Description);
-            return;
+            return titulosResult.Error;
         }
 
         var titulosResponse = titulosResult.Value;
         if (titulosResponse.NaoModificado)
         {
             logger.LogDebug("TD API titulos response not modified since last check; skipping discovery.");
-            return;
+            return new DiscoveryResultado(FonteTemNovidade: false, 0, 0, 0);
         }
 
         var fonteResult = Hub.Domain.Fontes.Fonte.Create(FonteTdApi);
         if (fonteResult.IsFailure)
         {
             logger.LogError("Failed to build td-api Fonte value object: {Description}", fonteResult.Error.Description);
-            return;
+            return fonteResult.Error;
         }
 
         var fonte = fonteResult.Value;
@@ -57,14 +60,14 @@ public sealed class TdApiAdapter(
         if (instrumentosResult.IsFailure)
         {
             logger.LogError("Failed to list existing td instruments: {Description}", instrumentosResult.Error.Description);
-            return;
+            return instrumentosResult.Error;
         }
 
         var fontesResult = await repository.ListarFontesAsync(fonte, ct);
         if (fontesResult.IsFailure)
         {
             logger.LogError("Failed to list existing td-api instrumento_fontes: {Description}", fontesResult.Error.Description);
-            return;
+            return fontesResult.Error;
         }
 
         var instrumentosPorId = instrumentosResult.Value.ToDictionary(i => i.Id.Value);
@@ -196,14 +199,23 @@ public sealed class TdApiAdapter(
             fontesPorCodigo[codigo.Value] = instrumentoFonteResult.Value;
         }
 
-        await unitOfWork.SaveChangesAsync(ct);
+        var saveResult = await unitOfWork.SaveChangesAsync(ct);
+        if (saveResult.IsFailure)
+        {
+            logger.LogWarning(
+                "Failed to persist TD API discovery changes: {Code} - {Description}; discovery will be retried on the next cycle.",
+                saveResult.Error.Code, saveResult.Error.Description);
+            return saveResult.Error;
+        }
 
         logger.LogInformation(
             "TD API discovery completed: {Criados} created, {Atualizados} updated, {Inalterados} unchanged.",
             criados, atualizados, inalterados);
+
+        return new DiscoveryResultado(FonteTemNovidade: true, criados, atualizados, inalterados);
     }
 
-    public async IAsyncEnumerable<PriceObserved> FetchAsync(
+    public async IAsyncEnumerable<PrecoLido> FetchAsync(
         string codigoNaFonte, DateOnly dataInicio, [EnumeratorCancellation] CancellationToken ct)
     {
         var hoje = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
@@ -215,6 +227,9 @@ public sealed class TdApiAdapter(
         var fonteResult = Hub.Domain.Fontes.Fonte.Create(FonteTdApi);
         if (fonteResult.IsFailure)
         {
+            logger.LogError(
+                "Failed to build td-api Fonte value object while fetching prices for {Codigo}: {Description}",
+                codigoNaFonte, fonteResult.Error.Description);
             yield break;
         }
 
@@ -223,22 +238,76 @@ public sealed class TdApiAdapter(
         var instrumentoIdResult = InstrumentoId.Create($"td:{codigoNaFonte}");
         if (instrumentoIdResult.IsFailure)
         {
+            logger.LogError(
+                "Failed to build InstrumentoId while fetching prices for {Codigo}: {Description}",
+                codigoNaFonte, instrumentoIdResult.Error.Description);
             yield break;
         }
 
         var instrumentoId = instrumentoIdResult.Value;
         var janelaAnos = ResolverJanelaBackfillAnos();
+        var piso = ResolverPisoPrograma();
+        var efetivoInicio = dataInicio;
 
-        foreach (var (janelaInicio, janelaFim) in ConstruirJanelas(dataInicio, hoje, janelaAnos))
+        if (dataInicio <= piso)
         {
-            await foreach (var preco in client.GetPrecosAsync(codigoNaFonte, janelaInicio, janelaFim, ct))
+            var ancoraResult = await client.ObterAncoraAsync(codigoNaFonte, ct);
+
+            if (ancoraResult.IsFailure)
             {
+                logger.LogWarning(
+                    "Failed to fetch ancora for {Codigo}: {Description}; falling back to dataInicio {DataInicio}.",
+                    codigoNaFonte, ancoraResult.Error.Description, dataInicio);
+            }
+            else if (ancoraResult.Value.PrimeiraData is null)
+            {
+                logger.LogInformation(
+                    "TD API has no prices at all for {Codigo}; skipping backfill.", codigoNaFonte);
+                yield break;
+            }
+            else
+            {
+                var ancora = ancoraResult.Value.PrimeiraData.Value;
+
+                if (ancora < piso || ancora > hoje)
+                {
+                    logger.LogWarning(
+                        "Ancora {Ancora} for {Codigo} is outside of [{Piso}, {Hoje}]; falling back to dataInicio {DataInicio}.",
+                        ancora, codigoNaFonte, piso, hoje, dataInicio);
+                }
+                else
+                {
+                    efetivoInicio = ancora;
+                }
+            }
+        }
+
+        var linha = 0;
+
+        foreach (var (janelaInicio, janelaFim) in ConstruirJanelas(efetivoInicio, hoje, janelaAnos))
+        {
+            var truncado = false;
+
+            await foreach (var precoResult in client.GetPrecosAsync(codigoNaFonte, janelaInicio, janelaFim, ct))
+            {
+                linha++;
+
+                if (precoResult.IsFailure)
+                {
+                    yield return new PrecoLido(linha, precoResult.Error);
+                    truncado = true;
+                    break;
+                }
+
+                var preco = precoResult.Value;
+
                 if (!DateOnly.TryParseExact(
                     preco.DataBase, DataFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dataBase))
                 {
                     logger.LogWarning(
                         "Skipping preco with unparseable dataBase {DataBase} for {Codigo}",
                         preco.DataBase, codigoNaFonte);
+                    yield return new PrecoLido(linha, AdapterErrors.TdApiDataBaseInvalida);
                     continue;
                 }
 
@@ -248,6 +317,7 @@ public sealed class TdApiAdapter(
                     logger.LogWarning(
                         "Skipping preco with invalid dataBase {DataBase} for {Codigo}: {Description}",
                         preco.DataBase, codigoNaFonte, dataRefResult.Error.Description);
+                    yield return new PrecoLido(linha, dataRefResult.Error);
                     continue;
                 }
 
@@ -256,8 +326,13 @@ public sealed class TdApiAdapter(
 
                 foreach (var priceObserved in CriarPriceObserved(instrumentoId, dataRef, fonte, observadoEm, preco))
                 {
-                    yield return priceObserved;
+                    yield return new PrecoLido(linha, priceObserved);
                 }
+            }
+
+            if (truncado)
+            {
+                yield break;
             }
         }
     }
@@ -297,22 +372,44 @@ public sealed class TdApiAdapter(
 
     private int ResolverJanelaBackfillAnos()
     {
-        var configurado = configuration.GetValue<int?>("TdApi:JanelaBackfillAnos");
+        var configurado = configuration["TdApi:JanelaBackfillAnos"];
 
-        if (configurado is null)
+        if (string.IsNullOrWhiteSpace(configurado))
         {
             return JanelaBackfillAnosPadrao;
         }
 
-        if (configurado.Value < 1)
+        if (!int.TryParse(configurado, NumberStyles.Integer, CultureInfo.InvariantCulture, out var janela)
+            || janela < 1)
         {
             logger.LogWarning(
                 "TdApi:JanelaBackfillAnos configured with invalid value {Configurado}; falling back to default {Default}.",
-                configurado.Value, JanelaBackfillAnosPadrao);
+                configurado, JanelaBackfillAnosPadrao);
             return JanelaBackfillAnosPadrao;
         }
 
-        return configurado.Value;
+        return janela;
+    }
+
+    private DateOnly ResolverPisoPrograma()
+    {
+        var configurado = configuration["TdApi:PisoPrograma"];
+
+        if (string.IsNullOrWhiteSpace(configurado))
+        {
+            return PisoProgramaPadrao;
+        }
+
+        if (!DateOnly.TryParseExact(
+            configurado, DataFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out var piso))
+        {
+            logger.LogWarning(
+                "TdApi:PisoPrograma configured with invalid value {Configurado}; falling back to default {Default}.",
+                configurado, PisoProgramaPadrao);
+            return PisoProgramaPadrao;
+        }
+
+        return piso;
     }
 
     private static IEnumerable<(DateOnly Inicio, DateOnly Fim)> ConstruirJanelas(DateOnly dataInicio, DateOnly hoje, int janelaAnos)

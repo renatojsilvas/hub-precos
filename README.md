@@ -11,11 +11,15 @@ o serviço de custódia. Ver [`plataforma-docs/ARQUITETURA.md`](../plataforma-do
 
 ## Estado atual
 
-Esqueleto de solução: os 4 projetos existem, compilam, a API sobe, aplica migration
-no boot e responde health/metrics/swagger — mas **não há nenhum endpoint de negócio**
-(nada sob `/v1`, nenhuma entidade de domínio) e **não há suíte de testes**. Se você
-veio procurar preços/instrumentos, ainda não existe; o que existe é a base para
-construir isso seguindo os padrões do repo de referência.
+A API sobe, aplica migration no boot e responde health/metrics/swagger. O schema da
+§4.1 do plano (`instrumentos`, `instrumento_fontes`, `precos`, `outbox`) existe, e o
+**job de ingestão do Tesouro Direto** (§4.3) roda a cada 15 min: sonda condicional,
+discovery aditivo do universo, backfill por janelas, delta D-5, e gravação da
+canônica com evento na outbox na mesma transação.
+
+O que **ainda não existe**: nenhum endpoint de negócio sob `/v1` (nem `GET
+/prices/asof` nem o catálogo da §4.5), e o relay outbox → RabbitMQ da §4.4 — a outbox
+é escrita desde já, mas ninguém a lê ainda. É o item 2 da ordem de implementação.
 
 ## Rodar com Docker (caminho padrão)
 
@@ -122,6 +126,37 @@ Topologia de produção, diferente da local em dois pontos:
   dentro da rede `tesouro-net`. Para depurar na VPS, use
   `docker exec hub-precos-app curl -sf http://localhost:8080/health/ready` — `curl` a
   partir do host não tem por onde chegar.
+
+- **Uma réplica só, e isso não é negociável hoje.** O job de ingestão é agendado por
+  Quartz com o store em memória (`RAMJobStore`), sem `UsePersistentStore` nem
+  clustering. O `[DisallowConcurrentExecution]` que impede sobreposição vale **por
+  processo**: com duas réplicas, cada uma tem seu próprio scheduler disparando o mesmo
+  cron no mesmo instante, e uma não enxerga a outra. Duas execuções concorrentes que
+  leiam as revisões correntes antes de qualquer uma commitar calculam a mesma
+  `revisao + 1` e colidem na PK de `precos`. A colisão é tratada (o instrumento entra
+  em `InstrumentosComFalha` e o ciclo segue), mas é trabalho jogado fora. Escalar
+  horizontalmente exige antes migrar o Quartz para store persistente com clustering.
+  Nenhum teste captura essa restrição — ela vive aqui.
+
+## Ingestão do Tesouro Direto
+
+O ciclo roda sozinho a cada 15 min (`TdApi:CronSchedule`). Chaves de
+`appsettings.json` que valem conhecer:
+
+| Chave | Default | Para que serve |
+|---|---|---|
+| `TdApi:CronSchedule` | `0 0/15 * * * ?` | Cadência do ciclo |
+| `TdApi:AgendamentoAtivo` | `true` | `false` desliga o agendamento (usado no ambiente de teste) |
+| `TdApi:JanelaDeltaDias` | `5` | Quantos dias para trás o delta relê, de propósito, para captar correção |
+| `TdApi:JanelaBackfillAnos` | `2` | Tamanho da janela de datas no backfill |
+| `TdApi:PisoPrograma` | `2002-01-07` | Início do programa; serve de sanity check da âncora |
+| `TdApi:TamanhoLote` | `1000` | Linhas por transação |
+
+Todo valor inválido cai no default **com aviso no log**, nunca em silêncio.
+
+Botão de reparo: apagar os preços de um instrumento força o re-backfill dele no ciclo
+seguinte, porque o watermark é derivado de `MAX(data_ref)` e não existe como coluna
+(ADR-5). Não há estado de progresso para limpar junto.
 
 Segredos necessários em `Settings → Secrets and variables → Actions`: `VPS_HOST`,
 `VPS_USER`, `VPS_SSH_KEY` (chave privada dedicada ao deploy, não a pessoal) e

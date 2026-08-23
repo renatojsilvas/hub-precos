@@ -11,9 +11,12 @@ internal sealed class FakeInstrumentoWriteRepository : IInstrumentoWriteReposito
 
     public List<InstrumentoFonte> Fontes { get; } = [];
 
+    public Error? FalhaAoListarPorClasse { get; set; }
+
     public Task<Result<IReadOnlyList<Instrumento>>> ListarPorClasseAsync(ClasseInstrumento classe, CancellationToken ct) =>
-        Task.FromResult(Result<IReadOnlyList<Instrumento>>.Success(
-            Instrumentos.Where(i => i.Classe == classe).ToList()));
+        Task.FromResult(FalhaAoListarPorClasse is not null
+            ? Result<IReadOnlyList<Instrumento>>.Failure(FalhaAoListarPorClasse)
+            : Result<IReadOnlyList<Instrumento>>.Success(Instrumentos.Where(i => i.Classe == classe).ToList()));
 
     public Task<Result<IReadOnlyList<InstrumentoFonte>>> ListarFontesAsync(Fonte fonte, CancellationToken ct) =>
         Task.FromResult(Result<IReadOnlyList<InstrumentoFonte>>.Success(

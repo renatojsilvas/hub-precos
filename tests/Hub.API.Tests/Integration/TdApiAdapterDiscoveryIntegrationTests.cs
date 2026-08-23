@@ -28,7 +28,10 @@ public sealed class TdApiAdapterDiscoveryIntegrationTests
         public Task<Result<TitulosResponse>> GetTitulosAsync(CancellationToken cancellationToken) =>
             Task.FromResult(Result<TitulosResponse>.Success(response));
 
-        public async IAsyncEnumerable<PrecoTaxaResponse> GetPrecosAsync(
+        public Task<Result<AncoraPrecos>> ObterAncoraAsync(string codigo, CancellationToken cancellationToken) =>
+            Task.FromResult(Result<AncoraPrecos>.Success(new AncoraPrecos(null, 0)));
+
+        public async IAsyncEnumerable<Result<PrecoTaxaResponse>> GetPrecosAsync(
             string codigo, DateOnly dataInicio, DateOnly dataFim,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
         {

@@ -4,6 +4,7 @@ using Hub.Domain.Common;
 using Hub.Domain.Fontes;
 using Hub.Domain.Instrumentos;
 using Hub.Infrastructure.TdApi;
+using Hub.Infrastructure.Tests.Common;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -197,6 +198,47 @@ public sealed class TdApiAdapterTests
     }
 
     [Fact]
+    public async Task DiscoverAsync_ComCriadosAtualizadosEInalterados_DevolveContadoresCorretos()
+    {
+        var fonte = Fonte.Create("td-api").Value;
+        var repository = new FakeInstrumentoWriteRepository();
+
+        var idInalterado = InstrumentoId.Create("td:titulo-inalterado").Value;
+        var instrumentoInalterado = Instrumento.Create(
+            idInalterado, "Tesouro Selic 2029-03-01", null, new DateOnly(2029, 3, 1), false,
+            """{"indexador":"selic","tipo":"Tesouro Selic"}""", Agora.AddDays(-10)).Value;
+
+        var idAtualizado = InstrumentoId.Create("td:titulo-atualizado").Value;
+        var instrumentoAtualizado = Instrumento.Create(
+            idAtualizado, "Tesouro Prefixado 2030-01-01", null, new DateOnly(2030, 1, 1), false,
+            """{"indexador":"prefixado","tipo":"Tesouro Prefixado"}""", Agora.AddDays(-10)).Value;
+
+        repository.Instrumentos.AddRange([instrumentoInalterado, instrumentoAtualizado]);
+        repository.Fontes.AddRange([
+            InstrumentoFonte.Create(idInalterado, fonte, CodigoNaFonte.Create("titulo-inalterado").Value).Value,
+            InstrumentoFonte.Create(idAtualizado, fonte, CodigoNaFonte.Create("titulo-atualizado").Value).Value,
+        ]);
+
+        var tituloInalterado = CriarTitulo("titulo-inalterado", "Tesouro Selic", "2029-03-01", "selic", false);
+        var tituloAtualizado = CriarTitulo("titulo-atualizado", "Tesouro Prefixado", "2030-01-01", "prefixado", true);
+        var tituloNovoA = CriarTitulo("titulo-novo-a");
+        var tituloNovoB = CriarTitulo("titulo-novo-b");
+
+        var client = new FakeTdApiClient(new TitulosResponse(
+            false, [tituloInalterado, tituloAtualizado, tituloNovoA, tituloNovoB]));
+        var unitOfWork = new FakeUnitOfWork();
+        var adapter = CriarAdapter(client, repository, unitOfWork);
+
+        var resultado = await adapter.DiscoverAsync(CancellationToken.None);
+
+        Assert.True(resultado.IsSuccess);
+        Assert.True(resultado.Value.FonteTemNovidade);
+        Assert.Equal(2, resultado.Value.Criados);
+        Assert.Equal(1, resultado.Value.Atualizados);
+        Assert.Equal(1, resultado.Value.Inalterados);
+    }
+
+    [Fact]
     public async Task DiscoverAsync_ComCampoDeCatalogoMudado_AtualizaOInstrumentoExistente()
     {
         var fonte = Fonte.Create("td-api").Value;
@@ -298,6 +340,58 @@ public sealed class TdApiAdapterTests
     }
 
     [Fact]
+    public async Task FetchAsync_ComItemDeFalhaDoClient_RepassaAFalhaEParaSemBuscarAProximaJanela()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["TdApi:JanelaBackfillAnos"] = "1" })
+            .Build();
+        var timeProvider = new FakeTimeProvider(Agora);
+        var client = new FakeTdApiClient(
+            Result<TitulosResponse>.Success(new TitulosResponse(false, [])),
+            precosResultFactory: (_, _, _) => [Result<PrecoTaxaResponse>.Failure(AdapterErrors.TdApiHttpError)]);
+        var adapter = CriarAdapter(
+            client, new FakeInstrumentoWriteRepository(), new FakeUnitOfWork(), timeProvider, configuration);
+
+        var itens = await ColetarLidos(adapter.FetchAsync("titulo-x", new DateOnly(2024, 1, 1), CancellationToken.None));
+
+        var item = Assert.Single(itens);
+        Assert.Equal(1, item.Linha);
+        Assert.True(item.Preco.IsFailure);
+        Assert.Equal(AdapterErrors.TdApiHttpError.Code, item.Preco.Error.Code);
+
+        Assert.Single(client.PrecosCalls);
+    }
+
+    [Fact]
+    public async Task FetchAsync_ComDataBaseInvalidoEntreLinhasBoas_EmitePrecoLidoDeFalhaNaPosicaoCertaEMantemAsBoas()
+    {
+        var precoBom1 = new PrecoTaxaResponse("2026-01-05", 1.1m, null, null, null, null);
+        var precoRuim = new PrecoTaxaResponse("nao-e-uma-data", 1.2m, null, null, null, null);
+        var precoBom2 = new PrecoTaxaResponse("2026-01-06", 1.3m, null, null, null, null);
+
+        var client = new FakeTdApiClient(
+            Result<TitulosResponse>.Success(new TitulosResponse(false, [])),
+            (_, _, _) => [precoBom1, precoRuim, precoBom2]);
+        var adapter = CriarAdapter(client, new FakeInstrumentoWriteRepository(), new FakeUnitOfWork());
+
+        var itens = await ColetarLidos(adapter.FetchAsync("titulo-x", new DateOnly(2026, 1, 5), CancellationToken.None));
+
+        Assert.Equal(3, itens.Count);
+
+        Assert.True(itens[0].Preco.IsSuccess);
+        Assert.Equal(1, itens[0].Linha);
+        Assert.Equal(1.1m, itens[0].Preco.Value.Valor);
+
+        Assert.True(itens[1].Preco.IsFailure);
+        Assert.Equal(2, itens[1].Linha);
+        Assert.Equal(AdapterErrors.TdApiDataBaseInvalida.Code, itens[1].Preco.Error.Code);
+
+        Assert.True(itens[2].Preco.IsSuccess);
+        Assert.Equal(3, itens[2].Linha);
+        Assert.Equal(1.3m, itens[2].Preco.Value.Valor);
+    }
+
+    [Fact]
     public async Task FetchAsync_ComJanelaConfigurada_CobreOIntervaloSemBuracoNemSobreposicao()
     {
         var configuration = new ConfigurationBuilder()
@@ -317,6 +411,59 @@ public sealed class TdApiAdapterTests
                 ("titulo-x", new DateOnly(2026, 1, 1), new DateOnly(2026, 8, 22)),
             ],
             client.PrecosCalls);
+    }
+
+    [Fact]
+    public async Task FetchAsync_ComJanelaBackfillAnosChaveAusente_UsaODefaultDeDoisAnos()
+    {
+        var timeProvider = new FakeTimeProvider(Agora);
+        var client = new FakeTdApiClient(Result<TitulosResponse>.Success(new TitulosResponse(false, [])));
+        var adapter = CriarAdapter(
+            client, new FakeInstrumentoWriteRepository(), new FakeUnitOfWork(), timeProvider);
+
+        await Coletar(adapter.FetchAsync("titulo-x", new DateOnly(2024, 1, 1), CancellationToken.None));
+
+        Assert.Equal(
+            [
+                ("titulo-x", new DateOnly(2024, 1, 1), new DateOnly(2025, 12, 31)),
+                ("titulo-x", new DateOnly(2026, 1, 1), new DateOnly(2026, 8, 22)),
+            ],
+            client.PrecosCalls);
+    }
+
+    [Fact]
+    public async Task FetchAsync_ComJanelaBackfillAnosTextoNaoParseavel_NaoLancaUsaODefaultELogaAviso()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["TdApi:JanelaBackfillAnos"] = "dois" })
+            .Build();
+        var timeProvider = new FakeTimeProvider(Agora);
+        var client = new FakeTdApiClient(Result<TitulosResponse>.Success(new TitulosResponse(false, [])));
+        var logger = new FakeLogger<TdApiAdapter>();
+        var adapter = CriarAdapter(
+            client, new FakeInstrumentoWriteRepository(), new FakeUnitOfWork(), timeProvider, configuration, logger);
+
+        // Contra a implementação anterior (configuration.GetValue<int?>), "dois" fazia
+        // ResolverJanelaBackfillAnos lançar InvalidOperationException direto de dentro do FetchAsync,
+        // no meio de um ciclo de ingestão real. Aqui provamos que isso não acontece mais: o
+        // Record.ExceptionAsync captura qualquer exceção do MoveNextAsync do IAsyncEnumerable.
+        List<PrecoLido>? itens = null;
+        var excecao = await Record.ExceptionAsync(async () =>
+            itens = await ColetarLidos(adapter.FetchAsync("titulo-x", new DateOnly(2024, 1, 1), CancellationToken.None)));
+
+        Assert.Null(excecao);
+        Assert.NotNull(itens);
+
+        Assert.Equal(
+            [
+                ("titulo-x", new DateOnly(2024, 1, 1), new DateOnly(2025, 12, 31)),
+                ("titulo-x", new DateOnly(2026, 1, 1), new DateOnly(2026, 8, 22)),
+            ],
+            client.PrecosCalls);
+
+        Assert.Contains(
+            logger.Entries,
+            e => e.Level == LogLevel.Warning && e.Message.Contains("JanelaBackfillAnos", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -364,9 +511,151 @@ public sealed class TdApiAdapterTests
         Assert.Empty(client.PrecosCalls);
     }
 
-    private static async Task<List<PriceObserved>> Coletar(IAsyncEnumerable<PriceObserved> source)
+    [Fact]
+    public async Task FetchAsync_ComDataInicioMaiorQueOPiso_NaoChamaAAncora()
+    {
+        var timeProvider = new FakeTimeProvider(Agora);
+        var client = new FakeTdApiClient(Result<TitulosResponse>.Success(new TitulosResponse(false, [])));
+        var adapter = CriarAdapter(client, new FakeInstrumentoWriteRepository(), new FakeUnitOfWork(), timeProvider);
+
+        await Coletar(adapter.FetchAsync("titulo-x", new DateOnly(2024, 1, 1), CancellationToken.None));
+
+        Assert.Empty(client.AncoraCalls);
+    }
+
+    [Fact]
+    public async Task FetchAsync_ComDataInicioMenorOuIgualAoPiso_ChamaAAncoraUmaVezEComecaAPrimeiraJanelaNaAncora()
+    {
+        var timeProvider = new FakeTimeProvider(Agora);
+        var client = new FakeTdApiClient(
+            Result<TitulosResponse>.Success(new TitulosResponse(false, [])),
+            ancoraResult: Result<AncoraPrecos>.Success(new AncoraPrecos(new DateOnly(2015, 6, 10), 100)));
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["TdApi:JanelaBackfillAnos"] = "20" })
+            .Build();
+        var adapter = CriarAdapter(
+            client, new FakeInstrumentoWriteRepository(), new FakeUnitOfWork(), timeProvider, configuration);
+
+        await Coletar(adapter.FetchAsync("titulo-x", new DateOnly(2002, 1, 7), CancellationToken.None));
+
+        Assert.Equal(["titulo-x"], client.AncoraCalls);
+        Assert.Equal(("titulo-x", new DateOnly(2015, 6, 10), new DateOnly(2026, 8, 22)), client.PrecosCalls[0]);
+    }
+
+    [Fact]
+    public async Task FetchAsync_ComAncoraNula_NaoBuscaNenhumaJanelaENaoProduzNada()
+    {
+        var timeProvider = new FakeTimeProvider(Agora);
+        var client = new FakeTdApiClient(
+            Result<TitulosResponse>.Success(new TitulosResponse(false, [])),
+            ancoraResult: Result<AncoraPrecos>.Success(new AncoraPrecos(null, 0)));
+        var adapter = CriarAdapter(client, new FakeInstrumentoWriteRepository(), new FakeUnitOfWork(), timeProvider);
+
+        var itens = await Coletar(adapter.FetchAsync("titulo-x", new DateOnly(2002, 1, 7), CancellationToken.None));
+
+        Assert.Empty(itens);
+        Assert.Empty(client.PrecosCalls);
+        Assert.Equal(["titulo-x"], client.AncoraCalls);
+    }
+
+    [Theory]
+    [InlineData(1998, 1, 1)]
+    [InlineData(2026, 8, 23)]
+    public async Task FetchAsync_ComAncoraForaDoIntervaloPisoHoje_CaiDeVoltaParaDataInicioComAviso(int ano, int mes, int dia)
+    {
+        var timeProvider = new FakeTimeProvider(Agora);
+        var ancoraForaDoIntervalo = new DateOnly(ano, mes, dia);
+        var client = new FakeTdApiClient(
+            Result<TitulosResponse>.Success(new TitulosResponse(false, [])),
+            ancoraResult: Result<AncoraPrecos>.Success(new AncoraPrecos(ancoraForaDoIntervalo, 1)));
+        var logger = new FakeLogger<TdApiAdapter>();
+        var adapter = CriarAdapter(
+            client, new FakeInstrumentoWriteRepository(), new FakeUnitOfWork(), timeProvider, logger: logger);
+
+        await Coletar(adapter.FetchAsync("titulo-x", new DateOnly(2002, 1, 7), CancellationToken.None));
+
+        Assert.Equal(new DateOnly(2002, 1, 7), client.PrecosCalls[0].DataInicio);
+        Assert.Contains(
+            logger.Entries,
+            e => e.Level == LogLevel.Warning && e.Message.Contains("outside of", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task FetchAsync_ComFalhaDoClientNaAncora_SegueComDataInicioSemLancar()
+    {
+        var timeProvider = new FakeTimeProvider(Agora);
+        var client = new FakeTdApiClient(
+            Result<TitulosResponse>.Success(new TitulosResponse(false, [])),
+            ancoraResult: Result<AncoraPrecos>.Failure(AdapterErrors.TdApiHttpError));
+        var logger = new FakeLogger<TdApiAdapter>();
+        var adapter = CriarAdapter(
+            client, new FakeInstrumentoWriteRepository(), new FakeUnitOfWork(), timeProvider, logger: logger);
+
+        var exception = await Record.ExceptionAsync(async () =>
+            await Coletar(adapter.FetchAsync("titulo-x", new DateOnly(2002, 1, 7), CancellationToken.None)));
+
+        Assert.Null(exception);
+        Assert.Equal(new DateOnly(2002, 1, 7), client.PrecosCalls[0].DataInicio);
+        Assert.Contains(
+            logger.Entries,
+            e => e.Level == LogLevel.Warning && e.Message.Contains("Failed to fetch ancora", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task FetchAsync_ComPisoProgramaInvalidoNaConfig_UsaODefaultEAvisa()
+    {
+        var timeProvider = new FakeTimeProvider(Agora);
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["TdApi:PisoPrograma"] = "nao-e-uma-data" })
+            .Build();
+        var client = new FakeTdApiClient(
+            Result<TitulosResponse>.Success(new TitulosResponse(false, [])),
+            ancoraResult: Result<AncoraPrecos>.Success(new AncoraPrecos(new DateOnly(2002, 1, 7), 1)));
+        var logger = new FakeLogger<TdApiAdapter>();
+        var adapter = CriarAdapter(
+            client, new FakeInstrumentoWriteRepository(), new FakeUnitOfWork(), timeProvider, configuration, logger);
+
+        await Coletar(adapter.FetchAsync("titulo-x", new DateOnly(2002, 1, 7), CancellationToken.None));
+
+        Assert.Equal(["titulo-x"], client.AncoraCalls);
+        Assert.Contains(
+            logger.Entries,
+            e => e.Level == LogLevel.Warning && e.Message.Contains("PisoPrograma", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task FetchAsync_ComCodigoNaFonteVazio_LogaErroENaoProduzNadaSemChamarAAncora()
+    {
+        var timeProvider = new FakeTimeProvider(Agora);
+        var client = new FakeTdApiClient(Result<TitulosResponse>.Success(new TitulosResponse(false, [])));
+        var logger = new FakeLogger<TdApiAdapter>();
+        var adapter = CriarAdapter(
+            client, new FakeInstrumentoWriteRepository(), new FakeUnitOfWork(), timeProvider, logger: logger);
+
+        var itens = await ColetarLidos(adapter.FetchAsync("", new DateOnly(2026, 8, 20), CancellationToken.None));
+
+        Assert.Empty(itens);
+        Assert.Empty(client.AncoraCalls);
+        Assert.Empty(client.PrecosCalls);
+        Assert.Contains(
+            logger.Entries,
+            e => e.Level == LogLevel.Error && e.Message.Contains("InstrumentoId", StringComparison.Ordinal));
+    }
+
+    private static async Task<List<PriceObserved>> Coletar(IAsyncEnumerable<PrecoLido> source)
     {
         var itens = new List<PriceObserved>();
+        await foreach (var item in source)
+        {
+            itens.Add(item.Preco.Value);
+        }
+
+        return itens;
+    }
+
+    private static async Task<List<PrecoLido>> ColetarLidos(IAsyncEnumerable<PrecoLido> source)
+    {
+        var itens = new List<PrecoLido>();
         await foreach (var item in source)
         {
             itens.Add(item);

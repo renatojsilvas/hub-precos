@@ -1,11 +1,13 @@
+using Hub.Domain.Common;
+
 namespace Hub.Application.Adapters;
 
 public interface IPriceSourceAdapter
 {
     string Fonte { get; }
 
-    Task DiscoverAsync(CancellationToken ct);
+    Task<Result<DiscoveryResultado>> DiscoverAsync(CancellationToken ct);
 
-    IAsyncEnumerable<PriceObserved> FetchAsync(
+    IAsyncEnumerable<PrecoLido> FetchAsync(
         string codigoNaFonte, DateOnly dataInicio, CancellationToken ct);
 }

@@ -18,6 +18,7 @@ public sealed class TdApiClient(
 {
     private const int PageSize = 500;
     private const string TitulosRequestUri = "v1/titulos";
+    private const string DataFormat = "yyyy-MM-dd";
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -93,7 +94,84 @@ public sealed class TdApiClient(
         }
     }
 
-    public async IAsyncEnumerable<PrecoTaxaResponse> GetPrecosAsync(
+    public async Task<Result<AncoraPrecos>> ObterAncoraAsync(string codigo, CancellationToken cancellationToken)
+    {
+        if (!TryGetBaseUrl(out _))
+        {
+            logger.LogError("TdApi:BaseUrl is not configured or is not a valid absolute URL.");
+            return AdapterErrors.TdApiUrlNaoConfigurada;
+        }
+
+        var requestUri = BuildAncoraRequestUri(codigo);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await httpClient.GetAsync(requestUri, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to fetch ancora de precos for {Codigo} from TD API.", codigo);
+            return AdapterErrors.TdApiHttpError;
+        }
+
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode)
+            {
+                logger.LogError("TD API returned {StatusCode} for ancora of {Codigo}.", response.StatusCode, codigo);
+                return AdapterErrors.TdApiHttpError;
+            }
+
+            var totalCount = 0;
+            var hasTotalCount = response.Headers.TryGetValues("X-Total-Count", out var totalCountValues)
+                && int.TryParse(totalCountValues.FirstOrDefault(), NumberStyles.Integer, CultureInfo.InvariantCulture, out totalCount);
+
+            List<PrecoTaxaResponse>? precos;
+            try
+            {
+                using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+                precos = await JsonSerializer.DeserializeAsync<List<PrecoTaxaResponse>>(stream, JsonOptions, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to read or deserialize ancora response from TD API for {Codigo}.", codigo);
+                return AdapterErrors.TdApiRespostaInvalida;
+            }
+
+            if (precos is null)
+            {
+                return AdapterErrors.TdApiRespostaInvalida;
+            }
+
+            var total = hasTotalCount ? totalCount : precos.Count;
+
+            if (precos.Count == 0)
+            {
+                return new AncoraPrecos(null, total);
+            }
+
+            if (!DateOnly.TryParseExact(
+                precos[0].DataBase, DataFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out var primeiraData))
+            {
+                logger.LogError(
+                    "TD API returned unparseable dataBase {DataBase} in ancora for {Codigo}.", precos[0].DataBase, codigo);
+                return AdapterErrors.TdApiRespostaInvalida;
+            }
+
+            return new AncoraPrecos(primeiraData, total);
+        }
+    }
+
+    public async IAsyncEnumerable<Result<PrecoTaxaResponse>> GetPrecosAsync(
         string codigo,
         DateOnly dataInicio,
         DateOnly dataFim,
@@ -102,6 +180,7 @@ public sealed class TdApiClient(
         if (!TryGetBaseUrl(out _))
         {
             logger.LogError("TdApi:BaseUrl is not configured or is not a valid absolute URL.");
+            yield return AdapterErrors.TdApiUrlNaoConfigurada;
             yield break;
         }
 
@@ -114,7 +193,8 @@ public sealed class TdApiClient(
         {
             var requestUri = BuildPrecosRequestUri(codigo, dataInicio, dataFim, page);
 
-            HttpResponseMessage response;
+            HttpResponseMessage? response = null;
+            Error? falhaDeEnvio = null;
             try
             {
                 response = await httpClient.GetAsync(requestUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
@@ -126,42 +206,63 @@ public sealed class TdApiClient(
             catch (Exception ex)
             {
                 logger.LogError(ex, "Failed to fetch precos for {Codigo} from TD API.", codigo);
+                falhaDeEnvio = AdapterErrors.TdApiHttpError;
+            }
+
+            if (falhaDeEnvio is not null)
+            {
+                yield return falhaDeEnvio;
                 yield break;
             }
 
-            List<PrecoTaxaResponse>? precos;
+            List<PrecoTaxaResponse>? precos = null;
+            Error? falhaDeLeitura = null;
             using (response)
             {
-                if (!response.IsSuccessStatusCode)
+                if (!response!.IsSuccessStatusCode)
                 {
                     logger.LogError(
                         "TD API returned {StatusCode} for precos of {Codigo}.", response.StatusCode, codigo);
-                    yield break;
+                    falhaDeLeitura = AdapterErrors.TdApiHttpError;
                 }
+                else
+                {
+                    if (page == 1)
+                    {
+                        hasTotalCount = response.Headers.TryGetValues("X-Total-Count", out var totalCountValues)
+                            && int.TryParse(totalCountValues.FirstOrDefault(), NumberStyles.Integer, CultureInfo.InvariantCulture, out totalCount);
+                    }
 
-                if (page == 1)
-                {
-                    hasTotalCount = response.Headers.TryGetValues("X-Total-Count", out var totalCountValues)
-                        && int.TryParse(totalCountValues.FirstOrDefault(), NumberStyles.Integer, CultureInfo.InvariantCulture, out totalCount);
-                }
-
-                try
-                {
-                    using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-                    precos = await JsonSerializer.DeserializeAsync<List<PrecoTaxaResponse>>(stream, JsonOptions, cancellationToken);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    logger.LogError(ex, "Failed to read or deserialize precos response from TD API for {Codigo}.", codigo);
-                    yield break;
+                    try
+                    {
+                        using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+                        precos = await JsonSerializer.DeserializeAsync<List<PrecoTaxaResponse>>(stream, JsonOptions, cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Failed to read or deserialize precos response from TD API for {Codigo}.", codigo);
+                        falhaDeLeitura = AdapterErrors.TdApiRespostaInvalida;
+                    }
                 }
             }
 
-            if (precos is null || precos.Count == 0)
+            if (falhaDeLeitura is not null)
+            {
+                yield return falhaDeLeitura;
+                yield break;
+            }
+
+            if (precos is null)
+            {
+                yield return AdapterErrors.TdApiRespostaInvalida;
+                yield break;
+            }
+
+            if (precos.Count == 0)
             {
                 yield break;
             }
@@ -191,5 +292,12 @@ public sealed class TdApiClient(
         var dataFimValue = dataFim.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
         return $"v1/titulos/{codigoSegment}/precos?dataInicio={dataInicioValue}&dataFim={dataFimValue}&page={page}&pageSize={PageSize}";
+    }
+
+    private static string BuildAncoraRequestUri(string codigo)
+    {
+        var codigoSegment = Uri.EscapeDataString(codigo);
+
+        return $"v1/titulos/{codigoSegment}/precos?page=1&pageSize=1";
     }
 }

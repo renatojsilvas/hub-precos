@@ -1,7 +1,12 @@
 using Hub.Application.Adapters;
 using Hub.Application.Common.Interfaces;
+using Hub.Application.Ingestao;
 using Hub.Application.Instrumentos;
+using Hub.Application.Outbox;
+using Hub.Application.Precos;
 using Hub.Infrastructure.Http;
+using Hub.Infrastructure.Ingestao;
+using Hub.Infrastructure.Observability;
 using Hub.Infrastructure.Persistence;
 using Hub.Infrastructure.Persistence.Repositories;
 using Hub.Infrastructure.TdApi;
@@ -12,7 +17,9 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Http.Resilience;
 using Npgsql;
 using Polly;
+using Polly.RateLimiting;
 using Prometheus;
+using Quartz;
 
 namespace Hub.Infrastructure;
 
@@ -38,6 +45,10 @@ public static class DependencyInjection
 
         services.AddScoped<IInstrumentoWriteRepository, InstrumentoWriteRepository>();
         services.AddScoped<IPriceSourceAdapter, TdApiAdapter>();
+        services.AddScoped<IIngestaoReadRepository, IngestaoReadRepository>();
+        services.AddScoped<IPrecoWriteRepository, PrecoWriteRepository>();
+        services.AddScoped<IOutboxWriteRepository, OutboxWriteRepository>();
+        services.AddSingleton<IBusinessMetrics, BusinessMetrics>();
 
         services.TryAddSingleton(TimeProvider.System);
 
@@ -63,6 +74,25 @@ public static class DependencyInjection
         .UseHttpClientMetrics()
         .AddTdApiResilienceHandler(configuration);
 
+        var agendamentoAtivo = configuration.GetValue<bool?>("TdApi:AgendamentoAtivo") ?? true;
+        var cron = configuration["TdApi:CronSchedule"] ?? "0 0/15 * * * ?";
+
+        services.AddQuartz(q =>
+        {
+            if (!agendamentoAtivo)
+            {
+                return;
+            }
+
+            var jobKey = new JobKey("td-ingestao");
+            q.AddJob<TdIngestaoJob>(opts => opts.WithIdentity(jobKey));
+            q.AddTrigger(opts => opts
+                .ForJob(jobKey)
+                .WithIdentity("td-ingestao-trigger")
+                .WithCronSchedule(cron, x => x.WithMisfireHandlingInstructionDoNothing()));
+        });
+        services.AddQuartzHostedService(q => q.WaitForJobsToComplete = true);
+
         return services;
     }
 
@@ -81,8 +111,11 @@ public static class DependencyInjection
             var samplingDuration = section.GetValue<TimeSpan?>("CircuitBreaker:SamplingDuration") ?? TimeSpan.FromSeconds(30);
             var breakDuration = section.GetValue<TimeSpan?>("CircuitBreaker:BreakDuration") ?? TimeSpan.FromSeconds(15);
             var attemptTimeout = section.GetValue<TimeSpan?>("AttemptTimeout") ?? TimeSpan.FromSeconds(10);
+            var concurrencyLimit = section.GetValue<int?>("ConcurrencyLimit") ?? 2;
+            var concurrencyQueueLimit = section.GetValue<int?>("ConcurrencyQueueLimit") ?? 8;
 
             pipeline
+                .AddConcurrencyLimiter(concurrencyLimit, concurrencyQueueLimit)
                 .AddTimeout(new HttpTimeoutStrategyOptions { Timeout = totalTimeout })
                 .AddRetry(new HttpRetryStrategyOptions
                 {

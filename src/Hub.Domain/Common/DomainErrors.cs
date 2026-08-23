@@ -12,5 +12,8 @@ public static class DomainErrors
 
         public static Error NullOrEmpty(string fieldName) =>
             new("General.NullOrEmpty", $"'{fieldName}' must not be null or empty.");
+
+        public static Error Conflict(string message) =>
+            new("General.Conflict", message, ErrorType.Conflict);
     }
 }

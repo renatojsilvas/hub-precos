@@ -1,6 +1,10 @@
+using Hub.Domain.Common;
+
 namespace Hub.Application.Common.Interfaces;
 
 public interface IUnitOfWork
 {
-    Task SaveChangesAsync(CancellationToken cancellationToken);
+    Task<Result> SaveChangesAsync(CancellationToken cancellationToken);
+
+    void LimparRastreamento();
 }

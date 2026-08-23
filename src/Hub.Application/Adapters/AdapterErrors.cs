@@ -12,4 +12,7 @@ public static class AdapterErrors
 
     public static readonly Error TdApiRespostaInvalida =
         new("TdApi.RespostaInvalida", "TD API response could not be deserialized.", ErrorType.Validation);
+
+    public static readonly Error TdApiDataBaseInvalida =
+        new("TdApi.DataBaseInvalida", "TD API preco has an unparseable dataBase.", ErrorType.Validation);
 }
