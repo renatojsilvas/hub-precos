@@ -109,7 +109,7 @@ public sealed class IngestaoReadRepositoryIntegrationTests
         await RegistrarPrecoAsync(db, comPreco.Id, new DateOnly(2026, 8, 10), "pu_venda", "wm-teste-1", 0, 100m);
         await RegistrarPrecoAsync(db, comPreco.Id, new DateOnly(2026, 8, 15), "pu_venda", "wm-teste-1", 0, 105m);
 
-        var resultado = await repo.ObterWatermarksAsync("wm-teste-1", "td", CancellationToken.None);
+        var resultado = await repo.ObterWatermarksAsync(Fonte.Create("wm-teste-1").Value, ClasseInstrumento.Td, CancellationToken.None);
 
         Assert.True(resultado.IsSuccess);
 
@@ -133,7 +133,7 @@ public sealed class IngestaoReadRepositoryIntegrationTests
         await RegistrarFonteAsync(db, instrumento.Id, "wm-teste-2", "watermark-contaminacao-codigo");
         await RegistrarPrecoAsync(db, instrumento.Id, new DateOnly(2026, 8, 1), "pu_venda", "wm-teste-2-outra-fonte", 0, 50m);
 
-        var resultado = await repo.ObterWatermarksAsync("wm-teste-2", "td", CancellationToken.None);
+        var resultado = await repo.ObterWatermarksAsync(Fonte.Create("wm-teste-2").Value, ClasseInstrumento.Td, CancellationToken.None);
 
         Assert.True(resultado.IsSuccess);
 
@@ -158,7 +158,7 @@ public sealed class IngestaoReadRepositoryIntegrationTests
         await RegistrarPrecoAsync(db, instrumentoId, new DateOnly(2026, 8, 10), "taxa_compra", "td-api", 0, 5m);
 
         var resultado = await repo.ObterRevisoesCorrentesAsync(
-            instrumentoId.Value, "td-api", new DateOnly(2026, 8, 8), CancellationToken.None);
+            instrumentoId, Fonte.TdApi, new DateOnly(2026, 8, 8), CancellationToken.None);
 
         Assert.True(resultado.IsSuccess);
         Assert.Equal(2, resultado.Value.Count);
@@ -211,7 +211,7 @@ public sealed class IngestaoReadRepositoryIntegrationTests
         var semPreco = await CriarInstrumentoAsync(db, "td:existe-sem-preco-a-sem-preco", ativoAte: null);
         await RegistrarFonteAsync(db, semPreco.Id, fonte, "existe-sem-preco-a-sem-preco-codigo");
 
-        var resultado = await repo.ExisteInstrumentoSemPrecoAsync(fonte, "td", CancellationToken.None);
+        var resultado = await repo.ExisteInstrumentoSemPrecoAsync(Fonte.Create(fonte).Value, ClasseInstrumento.Td, CancellationToken.None);
 
         Assert.True(resultado.IsSuccess);
         Assert.True(resultado.Value);
@@ -230,7 +230,7 @@ public sealed class IngestaoReadRepositoryIntegrationTests
         await RegistrarFonteAsync(db, instrumento.Id, fonte, "existe-sem-preco-b-com-preco-codigo");
         await RegistrarPrecoAsync(db, instrumento.Id, new DateOnly(2026, 8, 10), "pu_venda", fonte, 0, 100m);
 
-        var resultado = await repo.ExisteInstrumentoSemPrecoAsync(fonte, "td", CancellationToken.None);
+        var resultado = await repo.ExisteInstrumentoSemPrecoAsync(Fonte.Create(fonte).Value, ClasseInstrumento.Td, CancellationToken.None);
 
         Assert.True(resultado.IsSuccess);
         Assert.False(resultado.Value);
@@ -250,7 +250,7 @@ public sealed class IngestaoReadRepositoryIntegrationTests
         await RegistrarFonteAsync(db, instrumento.Id, fonte, "existe-sem-preco-c-outra-fonte-codigo");
         await RegistrarPrecoAsync(db, instrumento.Id, new DateOnly(2026, 8, 10), "pu_venda", outraFonte, 0, 100m);
 
-        var resultado = await repo.ExisteInstrumentoSemPrecoAsync(fonte, "td", CancellationToken.None);
+        var resultado = await repo.ExisteInstrumentoSemPrecoAsync(Fonte.Create(fonte).Value, ClasseInstrumento.Td, CancellationToken.None);
 
         Assert.True(resultado.IsSuccess);
         Assert.True(resultado.Value);
@@ -281,7 +281,8 @@ public sealed class IngestaoReadRepositoryIntegrationTests
         var semPreco = await CriarInstrumentoAsync(db, "td:eod-fechado-d-sem-preco", ativoAte: null);
         await RegistrarFonteAsync(db, semPreco.Id, fonte, "eod-fechado-d-codigo");
 
-        var resultado = await repo.ObterDataEodAsync(fonte, "td", new DateOnly(2026, 8, 21), CancellationToken.None);
+        var resultado = await repo.ObterDataEodAsync(
+            Fonte.Create(fonte).Value, ClasseInstrumento.Td, new DateOnly(2026, 8, 21), CancellationToken.None);
 
         Assert.True(resultado.IsSuccess);
         Assert.Equal(new DateOnly(2026, 8, 18), resultado.Value.Fechado);
@@ -291,8 +292,8 @@ public sealed class IngestaoReadRepositoryIntegrationTests
     [Fact]
     public async Task ObterDataEodAsync_UltimoEmitido_LeDaOutboxEEhNuloQuandoNaoHaEvento()
     {
-        const string fonte = "eod-ultimo-emitido-fonte-sem-uso";
-        const string classe = "td";
+        var fonte = Fonte.Create("eod-ultimo-emitido-fonte-sem-uso").Value;
+        var classe = ClasseInstrumento.Td;
         var hoje = new DateOnly(2026, 1, 1);
 
         await using var postgres = new PostgreSqlBuilder("postgres:16-alpine").Build();
@@ -330,8 +331,8 @@ public sealed class IngestaoReadRepositoryIntegrationTests
     [Fact]
     public async Task ObterDataEodAsync_PayloadDeOutboxCorrompido_DevolveResultFalhaEmVezDeSubirExcecaoCrua()
     {
-        const string fonte = "eod-payload-corrompido-fonte-sem-uso";
-        const string classe = "td";
+        var fonte = Fonte.Create("eod-payload-corrompido-fonte-sem-uso").Value;
+        var classe = ClasseInstrumento.Td;
         var hoje = new DateOnly(2026, 1, 1);
 
         await using var postgres = new PostgreSqlBuilder("postgres:16-alpine").Build();

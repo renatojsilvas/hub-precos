@@ -1,7 +1,9 @@
 using System.Text;
 using Dapper;
+using Hub.Application.Common;
 using Hub.Application.Instrumentos;
 using Hub.Domain.Common;
+using Hub.Domain.Instrumentos;
 using Npgsql;
 
 namespace Hub.Infrastructure.Persistence.Repositories;
@@ -32,13 +34,13 @@ public sealed class InstrumentoReadRepository(NpgsqlDataSource dataSource, TimeP
         WHERE 1 = 1
         """;
 
-    public async Task<Result<int>> ContarDoCatalogoAsync(string? classe, string? busca, CancellationToken ct)
+    public async Task<Result<int>> ContarDoCatalogoAsync(ClasseInstrumento? classe, string? busca, CancellationToken ct)
     {
         await using var connection = await dataSource.OpenConnectionAsync(ct);
 
         var sql = new StringBuilder(SqlContar);
         var parameters = new DynamicParameters();
-        AplicarFiltros(sql, parameters, classe, busca);
+        AplicarFiltros(sql, parameters, classe?.Name, busca);
 
         var total = await connection.ExecuteScalarAsync<int>(
             new CommandDefinition(sql.ToString(), parameters, cancellationToken: ct));
@@ -47,18 +49,18 @@ public sealed class InstrumentoReadRepository(NpgsqlDataSource dataSource, TimeP
     }
 
     public async Task<Result<IReadOnlyList<InstrumentoCatalogoRow>>> ObterPaginaDoCatalogoAsync(
-        string? classe, string? busca, int skip, int take, CancellationToken ct)
+        ClasseInstrumento? classe, string? busca, Paginacao paginacao, CancellationToken ct)
     {
         await using var connection = await dataSource.OpenConnectionAsync(ct);
 
         var sql = new StringBuilder(SqlPagina);
         var parameters = new DynamicParameters();
         parameters.Add("today", DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime));
-        AplicarFiltros(sql, parameters, classe, busca);
+        AplicarFiltros(sql, parameters, classe?.Name, busca);
 
         sql.Append(" ORDER BY id ASC OFFSET @skip LIMIT @take");
-        parameters.Add("skip", skip);
-        parameters.Add("take", take);
+        parameters.Add("skip", paginacao.Skip);
+        parameters.Add("take", paginacao.Take);
 
         var rows = await connection.QueryAsync<InstrumentoCatalogoRow>(
             new CommandDefinition(sql.ToString(), parameters, cancellationToken: ct));

@@ -4,6 +4,8 @@ namespace Hub.Domain.Fontes;
 
 public sealed record Fonte
 {
+    public static readonly Fonte TdApi = new("td-api");
+
     private Fonte(string value) => Value = value;
 
     public string Value { get; }

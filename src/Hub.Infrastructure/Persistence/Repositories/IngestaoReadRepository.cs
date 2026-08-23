@@ -1,6 +1,8 @@
 using Dapper;
 using Hub.Application.Ingestao;
 using Hub.Domain.Common;
+using Hub.Domain.Fontes;
+using Hub.Domain.Instrumentos;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 
@@ -72,14 +74,15 @@ public sealed class IngestaoReadRepository(NpgsqlDataSource dataSource, ILogger<
         """;
 
     public async Task<Result<IReadOnlyList<WatermarkInstrumento>>> ObterWatermarksAsync(
-        string fonte, string classe, CancellationToken ct)
+        Fonte fonte, ClasseInstrumento classe, CancellationToken ct)
     {
         try
         {
             await using var connection = await dataSource.OpenConnectionAsync(ct);
 
             var rows = await connection.QueryAsync<WatermarkInstrumento>(
-                new CommandDefinition(SqlWatermarks, new { fonte, classe }, cancellationToken: ct));
+                new CommandDefinition(
+                    SqlWatermarks, new { fonte = fonte.Value, classe = classe.Name }, cancellationToken: ct));
 
             IReadOnlyList<WatermarkInstrumento> watermarks = rows.ToList();
 
@@ -91,14 +94,14 @@ public sealed class IngestaoReadRepository(NpgsqlDataSource dataSource, ILogger<
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Falha ao obter watermarks para fonte {Fonte} classe {Classe}", fonte, classe);
+            logger.LogError(ex, "Falha ao obter watermarks para fonte {Fonte} classe {Classe}", fonte.Value, classe.Name);
             return Result<IReadOnlyList<WatermarkInstrumento>>.Failure(
                 IngestaoErrors.FalhaDeLeitura("Falha ao obter watermarks."));
         }
     }
 
     public async Task<Result<IReadOnlyDictionary<(DateOnly DataRef, string Campo), RevisaoCorrente>>> ObterRevisoesCorrentesAsync(
-        string instrumentoId, string fonte, DateOnly dataInicio, CancellationToken ct)
+        InstrumentoId instrumentoId, Fonte fonte, DateOnly dataInicio, CancellationToken ct)
     {
         try
         {
@@ -107,7 +110,7 @@ public sealed class IngestaoReadRepository(NpgsqlDataSource dataSource, ILogger<
             var rows = await connection.QueryAsync<RevisaoCorrenteRow>(
                 new CommandDefinition(
                     SqlRevisoesCorrentes,
-                    new { instrumentoId, fonte, dataInicio },
+                    new { instrumentoId = instrumentoId.Value, fonte = fonte.Value, dataInicio },
                     cancellationToken: ct));
 
             IReadOnlyDictionary<(DateOnly DataRef, string Campo), RevisaoCorrente> revisoes = rows.ToDictionary(
@@ -124,13 +127,13 @@ public sealed class IngestaoReadRepository(NpgsqlDataSource dataSource, ILogger<
         {
             logger.LogError(
                 ex, "Falha ao obter revisões correntes para instrumento {InstrumentoId} fonte {Fonte}",
-                instrumentoId, fonte);
+                instrumentoId.Value, fonte.Value);
             return Result<IReadOnlyDictionary<(DateOnly DataRef, string Campo), RevisaoCorrente>>.Failure(
                 IngestaoErrors.FalhaDeLeitura("Falha ao obter revisões correntes."));
         }
     }
 
-    public async Task<Result<DataEod>> ObterDataEodAsync(string fonte, string classe, DateOnly hoje, CancellationToken ct)
+    public async Task<Result<DataEod>> ObterDataEodAsync(Fonte fonte, ClasseInstrumento classe, DateOnly hoje, CancellationToken ct)
     {
         try
         {
@@ -139,7 +142,7 @@ public sealed class IngestaoReadRepository(NpgsqlDataSource dataSource, ILogger<
             await using var multi = await connection.QueryMultipleAsync(
                 new CommandDefinition(
                     $"{SqlDataEodFechado};{SqlDataEodUltimoEmitido};{SqlDataEodAtivosSemPreco};",
-                    new { fonte, classe, hoje },
+                    new { fonte = fonte.Value, classe = classe.Name, hoje },
                     cancellationToken: ct));
 
             var fechado = await multi.ReadSingleOrDefaultAsync<DateTime?>();
@@ -157,19 +160,21 @@ public sealed class IngestaoReadRepository(NpgsqlDataSource dataSource, ILogger<
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Falha ao obter data de fechamento EOD para fonte {Fonte} classe {Classe}", fonte, classe);
+            logger.LogError(
+                ex, "Falha ao obter data de fechamento EOD para fonte {Fonte} classe {Classe}", fonte.Value, classe.Name);
             return Result<DataEod>.Failure(IngestaoErrors.FalhaDeLeitura("Falha ao obter data de fechamento EOD."));
         }
     }
 
-    public async Task<Result<bool>> ExisteInstrumentoSemPrecoAsync(string fonte, string classe, CancellationToken ct)
+    public async Task<Result<bool>> ExisteInstrumentoSemPrecoAsync(Fonte fonte, ClasseInstrumento classe, CancellationToken ct)
     {
         try
         {
             await using var connection = await dataSource.OpenConnectionAsync(ct);
 
             var existe = await connection.ExecuteScalarAsync<bool>(
-                new CommandDefinition(SqlExisteInstrumentoSemPreco, new { fonte, classe }, cancellationToken: ct));
+                new CommandDefinition(
+                    SqlExisteInstrumentoSemPreco, new { fonte = fonte.Value, classe = classe.Name }, cancellationToken: ct));
 
             return Result<bool>.Success(existe);
         }
@@ -179,7 +184,8 @@ public sealed class IngestaoReadRepository(NpgsqlDataSource dataSource, ILogger<
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Falha ao verificar instrumento sem preço para fonte {Fonte} classe {Classe}", fonte, classe);
+            logger.LogError(
+                ex, "Falha ao verificar instrumento sem preço para fonte {Fonte} classe {Classe}", fonte.Value, classe.Name);
             return Result<bool>.Failure(IngestaoErrors.FalhaDeLeitura("Falha ao verificar instrumento sem preço."));
         }
     }

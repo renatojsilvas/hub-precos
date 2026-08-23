@@ -14,7 +14,7 @@ public sealed class GetInstrumentsQueryHandler(IInstrumentoReadRepository reposi
 
     public async Task<Result<InstrumentsResultado>> Handle(GetInstrumentsQuery request, CancellationToken cancellationToken)
     {
-        string? classe = null;
+        ClasseInstrumento? classe = null;
         if (!string.IsNullOrWhiteSpace(request.Classe))
         {
             var classeResult = ClasseInstrumento.FromName(request.Classe);
@@ -23,12 +23,10 @@ public sealed class GetInstrumentsQueryHandler(IInstrumentoReadRepository reposi
                 return classeResult.Error;
             }
 
-            classe = classeResult.Value.Name;
+            classe = classeResult.Value;
         }
 
         var busca = string.IsNullOrWhiteSpace(request.Busca) ? null : request.Busca.Trim();
-
-        var (page, pageSize) = PaginationDefaults.Normalize(request.Page, request.PageSize);
 
         var totalResult = await repository.ContarDoCatalogoAsync(classe, busca, cancellationToken);
         if (totalResult.IsFailure)
@@ -36,9 +34,9 @@ public sealed class GetInstrumentsQueryHandler(IInstrumentoReadRepository reposi
             return totalResult.Error;
         }
 
-        var skip = PaginationDefaults.ComputeSkip(page, pageSize, totalResult.Value);
+        var paginacao = PaginationDefaults.Criar(request.Page, request.PageSize, totalResult.Value);
 
-        var paginaResult = await repository.ObterPaginaDoCatalogoAsync(classe, busca, skip, pageSize, cancellationToken);
+        var paginaResult = await repository.ObterPaginaDoCatalogoAsync(classe, busca, paginacao, cancellationToken);
         if (paginaResult.IsFailure)
         {
             return paginaResult.Error;

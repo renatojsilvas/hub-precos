@@ -24,15 +24,13 @@ public sealed class GetPrecosAsOfQueryHandler(IPrecosAsOfReadRepository reposito
             return PrecoErrors.DataInvalida;
         }
 
-        var (page, pageSize) = PaginationDefaults.Normalize(request.Page, request.PageSize);
-
         return request.Instruments is null
-            ? await HandleCatalogoAsync(data, page, pageSize, cancellationToken)
-            : await HandleListaAsync(request.Instruments, data, page, pageSize, cancellationToken);
+            ? await HandleCatalogoAsync(data, request.Page, request.PageSize, cancellationToken)
+            : await HandleListaAsync(request.Instruments, data, request.Page, request.PageSize, cancellationToken);
     }
 
     private async Task<Result<PrecosAsOfResultado>> HandleListaAsync(
-        string instruments, DateOnly data, int page, int pageSize, CancellationToken cancellationToken)
+        string instruments, DateOnly data, int? page, int? pageSize, CancellationToken cancellationToken)
     {
         var tokens = instruments
             .Split(',')
@@ -52,12 +50,12 @@ public sealed class GetPrecosAsOfQueryHandler(IPrecosAsOfReadRepository reposito
             .ToList();
 
         var total = idsResolvidos.Count;
-        var skip = PaginationDefaults.ComputeSkip(page, pageSize, total);
-        var idsResolvidosDaPagina = idsResolvidos.Skip(skip).Take(pageSize).ToList();
+        var paginacao = PaginationDefaults.Criar(page, pageSize, total);
+        var idsResolvidosDaPagina = idsResolvidos.Skip(paginacao.Skip).Take(paginacao.Take).ToList();
 
         var idsValidos = idsResolvidosDaPagina
             .Where(x => x.Id.IsSuccess)
-            .Select(x => x.Id.Value.Value)
+            .Select(x => x.Id.Value)
             .ToList();
 
         var asOfResult = idsValidos.Count > 0
@@ -81,7 +79,7 @@ public sealed class GetPrecosAsOfQueryHandler(IPrecosAsOfReadRepository reposito
     }
 
     private async Task<Result<PrecosAsOfResultado>> HandleCatalogoAsync(
-        DateOnly data, int page, int pageSize, CancellationToken cancellationToken)
+        DateOnly data, int? page, int? pageSize, CancellationToken cancellationToken)
     {
         var totalResult = await repository.ContarInstrumentosDoCatalogoAsync(cancellationToken);
         if (totalResult.IsFailure)
@@ -89,8 +87,8 @@ public sealed class GetPrecosAsOfQueryHandler(IPrecosAsOfReadRepository reposito
             return totalResult.Error;
         }
 
-        var skip = PaginationDefaults.ComputeSkip(page, pageSize, totalResult.Value);
-        var paginaResult = await repository.ObterPaginaDoCatalogoAsync(skip, pageSize, cancellationToken);
+        var paginacao = PaginationDefaults.Criar(page, pageSize, totalResult.Value);
+        var paginaResult = await repository.ObterPaginaDoCatalogoAsync(paginacao, cancellationToken);
         if (paginaResult.IsFailure)
         {
             return paginaResult.Error;
@@ -102,8 +100,18 @@ public sealed class GetPrecosAsOfQueryHandler(IPrecosAsOfReadRepository reposito
             return new PrecosAsOfResultado(data, [], totalResult.Value);
         }
 
-        var asOfResult = await repository.ObterAsOfAsync(
-            catalogoDaPagina.Select(x => x.InstrumentoId).ToList(), data, cancellationToken);
+        var idsResolvidos = catalogoDaPagina
+            .Select(x => (Raw: x.InstrumentoId, x.Classe, Id: InstrumentoIdDoCatalogo(x.InstrumentoId)))
+            .ToList();
+
+        var idsValidos = idsResolvidos
+            .Where(x => x.Id is not null)
+            .Select(x => x.Id!)
+            .ToList();
+
+        var asOfResult = idsValidos.Count > 0
+            ? await repository.ObterAsOfAsync(idsValidos, data, cancellationToken)
+            : Result<IReadOnlyDictionary<string, AsOfInstrumento>>.Success(new Dictionary<string, AsOfInstrumento>());
         if (asOfResult.IsFailure)
         {
             return asOfResult.Error;
@@ -111,11 +119,27 @@ public sealed class GetPrecosAsOfQueryHandler(IPrecosAsOfReadRepository reposito
 
         var asOfPorId = asOfResult.Value;
 
-        var items = catalogoDaPagina
-            .Select(x => ParaItem(x.InstrumentoId, ClasseDoCatalogo(x.InstrumentoId, x.Classe), asOfPorId))
+        var items = idsResolvidos
+            .Select(x => x.Id is InstrumentoId id
+                ? ParaItem(id.Value, ClasseDoCatalogo(x.Raw, x.Classe), asOfPorId)
+                : ParaDesconhecido(NormalizarParaExibicao(x.Raw)))
             .ToList();
 
         return new PrecosAsOfResultado(data, items, totalResult.Value);
+    }
+
+    private InstrumentoId? InstrumentoIdDoCatalogo(string instrumentoId)
+    {
+        var resultado = InstrumentoId.Create(instrumentoId);
+        if (resultado.IsFailure)
+        {
+            logger.LogWarning(
+                "Instrumento {InstrumentoId} no catálogo não corresponde a nenhum InstrumentoId válido; " +
+                "linha ignorada na consulta de preços e devolvida como instrumento_desconhecido.", instrumentoId);
+            return null;
+        }
+
+        return resultado.Value;
     }
 
     private ClasseInstrumento? ClasseDoCatalogo(string instrumentoId, string classe)

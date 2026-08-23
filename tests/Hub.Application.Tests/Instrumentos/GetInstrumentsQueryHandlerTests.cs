@@ -34,8 +34,8 @@ public sealed class GetInstrumentsQueryHandlerTests
 
         await handler.Handle(new GetInstrumentsQuery("TD", Busca: null, Page: null, PageSize: null), CancellationToken.None);
 
-        Assert.Equal("td", repository.ContarCalls.Single().Classe);
-        Assert.Equal("td", repository.PaginaCalls.Single().Classe);
+        Assert.Equal(ClasseInstrumento.Td, repository.ContarCalls.Single().Classe);
+        Assert.Equal(ClasseInstrumento.Td, repository.PaginaCalls.Single().Classe);
     }
 
     [Fact]
@@ -59,8 +59,8 @@ public sealed class GetInstrumentsQueryHandlerTests
         await handler.Handle(new GetInstrumentsQuery(null, null, Page: null, PageSize: null), CancellationToken.None);
 
         var chamada = repository.PaginaCalls.Single();
-        Assert.Equal(0, chamada.Skip);
-        Assert.Equal(100, chamada.Take);
+        Assert.Equal(0, chamada.Paginacao.Skip);
+        Assert.Equal(100, chamada.Paginacao.Take);
     }
 
     [Fact]
@@ -72,8 +72,8 @@ public sealed class GetInstrumentsQueryHandlerTests
         await handler.Handle(new GetInstrumentsQuery(null, null, Page: 3, PageSize: 10), CancellationToken.None);
 
         var chamada = repository.PaginaCalls.Single();
-        Assert.Equal(20, chamada.Skip);
-        Assert.Equal(10, chamada.Take);
+        Assert.Equal(20, chamada.Paginacao.Skip);
+        Assert.Equal(10, chamada.Paginacao.Take);
     }
 
     [Fact]
@@ -87,8 +87,8 @@ public sealed class GetInstrumentsQueryHandlerTests
 
         Assert.True(resultado.IsSuccess);
         var chamada = repository.PaginaCalls.Single();
-        Assert.Equal(7, chamada.Skip);
-        Assert.Equal(500, chamada.Take);
+        Assert.Equal(7, chamada.Paginacao.Skip);
+        Assert.Equal(500, chamada.Paginacao.Take);
     }
 
     [Fact]
@@ -96,7 +96,7 @@ public sealed class GetInstrumentsQueryHandlerTests
     {
         var row = new InstrumentoCatalogoRow(
             "td:tesouro-selic-2029-03-01", "td", "Tesouro Selic 2029", null, null, false, "{}", Vencido: false);
-        var repository = new FakeInstrumentoReadRepository(pagina: (_, _, _, _) =>
+        var repository = new FakeInstrumentoReadRepository(pagina: (_, _, _) =>
             Result<IReadOnlyList<InstrumentoCatalogoRow>>.Success(new[] { row }));
         var handler = CriarHandler(repository);
 
@@ -111,7 +111,7 @@ public sealed class GetInstrumentsQueryHandlerTests
     {
         var row = new InstrumentoCatalogoRow(
             "acao:petr4", "acao", "Petrobras PN", null, null, false, "{}", Vencido: false);
-        var repository = new FakeInstrumentoReadRepository(pagina: (_, _, _, _) =>
+        var repository = new FakeInstrumentoReadRepository(pagina: (_, _, _) =>
             Result<IReadOnlyList<InstrumentoCatalogoRow>>.Success(new[] { row }));
         var handler = CriarHandler(repository);
 
@@ -127,7 +127,7 @@ public sealed class GetInstrumentsQueryHandlerTests
         var row = new InstrumentoCatalogoRow(
             "td:tesouro-selic-2029-03-01", "td", "Tesouro Selic 2029", null, null, false,
             "{\"indexador\":\"Selic\",\"tipo\":\"Tesouro Selic\"}", Vencido: false);
-        var repository = new FakeInstrumentoReadRepository(pagina: (_, _, _, _) =>
+        var repository = new FakeInstrumentoReadRepository(pagina: (_, _, _) =>
             Result<IReadOnlyList<InstrumentoCatalogoRow>>.Success(new[] { row }));
         var handler = CriarHandler(repository);
 
@@ -142,7 +142,7 @@ public sealed class GetInstrumentsQueryHandlerTests
     {
         var row = new InstrumentoCatalogoRow(
             "td:vencido", "td", "Vencido", null, new DateOnly(2020, 1, 1), false, "{}", Vencido: true);
-        var repository = new FakeInstrumentoReadRepository(pagina: (_, _, _, _) =>
+        var repository = new FakeInstrumentoReadRepository(pagina: (_, _, _) =>
             Result<IReadOnlyList<InstrumentoCatalogoRow>>.Success(new[] { row }));
         var handler = CriarHandler(repository);
 

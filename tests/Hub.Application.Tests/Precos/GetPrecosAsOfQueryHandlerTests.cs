@@ -188,10 +188,10 @@ public sealed class GetPrecosAsOfQueryHandlerTests
     {
         var repository = new FakePrecosAsOfReadRepository(
             contarResult: 3,
-            paginaCatalogo: (skip, take) =>
+            paginaCatalogo: paginacao =>
             {
-                Assert.Equal(0, skip);
-                Assert.Equal(2, take);
+                Assert.Equal(0, paginacao.Skip);
+                Assert.Equal(2, paginacao.Take);
                 return Result<IReadOnlyList<CatalogoInstrumento>>.Success(new List<CatalogoInstrumento>
                 {
                     new("acao:AAAA", "acao"),
@@ -199,8 +199,8 @@ public sealed class GetPrecosAsOfQueryHandlerTests
                 });
             },
             asOf: (ids, _) => ids.ToDictionary(
-                id => id,
-                id => new AsOfInstrumento(id, Existe: true, DataRef: null, Campos: [])));
+                id => id.Value,
+                id => new AsOfInstrumento(id.Value, Existe: true, DataRef: null, Campos: [])));
 
         var handler = CriarHandler(repository);
 
@@ -211,6 +211,8 @@ public sealed class GetPrecosAsOfQueryHandlerTests
         Assert.Equal(3, resultado.Value.TotalCount);
         Assert.Equal(2, resultado.Value.Items.Count);
         Assert.All(resultado.Value.Items, item => Assert.Equal("sem_preco_ate_a_data", item.Motivo));
+        Assert.Equal("acao:aaaa", resultado.Value.Items[0].InstrumentoId);
+        Assert.Equal("acao:bbbb", resultado.Value.Items[1].InstrumentoId);
     }
 
     [Fact]
@@ -218,13 +220,40 @@ public sealed class GetPrecosAsOfQueryHandlerTests
     {
         var repository = new FakePrecosAsOfReadRepository(
             contarResult: 1,
-            paginaCatalogo: (_, _) => Result<IReadOnlyList<CatalogoInstrumento>>.Success(new List<CatalogoInstrumento>
+            paginaCatalogo: _ => Result<IReadOnlyList<CatalogoInstrumento>>.Success(new List<CatalogoInstrumento>
             {
-                new("lixo-sem-prefixo", "lixo-sem-prefixo")
+                new("acao:lixo-sem-prefixo", "lixo-sem-prefixo")
             }),
             asOf: (ids, _) => ids.ToDictionary(
-                id => id,
-                id => new AsOfInstrumento(id, Existe: true, DataRef: null, Campos: [])));
+                id => id.Value,
+                id => new AsOfInstrumento(id.Value, Existe: true, DataRef: null, Campos: [])));
+
+        var logger = new FakeLogger<GetPrecosAsOfQueryHandler>();
+        var handler = CriarHandler(repository, logger);
+
+        var resultado = await handler.Handle(
+            new GetPrecosAsOfQuery("2026-08-14", Instruments: null, Page: null, PageSize: null), CancellationToken.None);
+
+        Assert.True(resultado.IsSuccess);
+        var item = Assert.Single(resultado.Value.Items);
+        Assert.Equal("acao:lixo-sem-prefixo", item.InstrumentoId);
+        Assert.Null(item.CampoPosicao);
+        Assert.Equal("sem_preco_ate_a_data", item.Motivo);
+        Assert.Contains(
+            logger.Entries,
+            e => e.Level == LogLevel.Warning
+                && e.Message.Contains("lixo-sem-prefixo", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Handle_QuandoOCatalogoTemUmaLinhaComIdSemPrefixo_NaoLancaEDevolveInstrumentoDesconhecido_ELogaWarning()
+    {
+        var repository = new FakePrecosAsOfReadRepository(
+            contarResult: 1,
+            paginaCatalogo: _ => Result<IReadOnlyList<CatalogoInstrumento>>.Success(new List<CatalogoInstrumento>
+            {
+                new("lixo-sem-prefixo", "td")
+            }));
 
         var logger = new FakeLogger<GetPrecosAsOfQueryHandler>();
         var handler = CriarHandler(repository, logger);
@@ -235,8 +264,8 @@ public sealed class GetPrecosAsOfQueryHandlerTests
         Assert.True(resultado.IsSuccess);
         var item = Assert.Single(resultado.Value.Items);
         Assert.Equal("lixo-sem-prefixo", item.InstrumentoId);
-        Assert.Null(item.CampoPosicao);
-        Assert.Equal("sem_preco_ate_a_data", item.Motivo);
+        Assert.Equal("instrumento_desconhecido", item.Motivo);
+        Assert.Empty(repository.AsOfCalls);
         Assert.Contains(
             logger.Entries,
             e => e.Level == LogLevel.Warning
@@ -248,8 +277,8 @@ public sealed class GetPrecosAsOfQueryHandlerTests
     {
         var repository = new FakePrecosAsOfReadRepository(
             asOf: (ids, _) => ids.ToDictionary(
-                id => id,
-                id => new AsOfInstrumento(id, Existe: true, DataRef: null, Campos: [])));
+                id => id.Value,
+                id => new AsOfInstrumento(id.Value, Existe: true, DataRef: null, Campos: [])));
 
         var handler = CriarHandler(repository);
 
@@ -269,10 +298,10 @@ public sealed class GetPrecosAsOfQueryHandlerTests
     {
         var repository = new FakePrecosAsOfReadRepository(
             contarResult: 4,
-            paginaCatalogo: (skip, take) =>
+            paginaCatalogo: paginacao =>
             {
-                Assert.Equal(4, skip);
-                Assert.Equal(500, take);
+                Assert.Equal(4, paginacao.Skip);
+                Assert.Equal(500, paginacao.Take);
                 return Result<IReadOnlyList<CatalogoInstrumento>>.Success(new List<CatalogoInstrumento>());
             });
 
@@ -292,8 +321,8 @@ public sealed class GetPrecosAsOfQueryHandlerTests
     {
         var repository = new FakePrecosAsOfReadRepository(
             asOf: (ids, _) => ids.ToDictionary(
-                id => id,
-                id => new AsOfInstrumento(id, Existe: true, DataRef: null, Campos: [])));
+                id => id.Value,
+                id => new AsOfInstrumento(id.Value, Existe: true, DataRef: null, Campos: [])));
 
         var handler = CriarHandler(repository);
 
@@ -328,8 +357,8 @@ public sealed class GetPrecosAsOfQueryHandlerTests
     {
         var repository = new FakePrecosAsOfReadRepository(
             asOf: (ids, _) => ids.ToDictionary(
-                id => id,
-                id => new AsOfInstrumento(id, Existe: true, DataRef: null, Campos: [])));
+                id => id.Value,
+                id => new AsOfInstrumento(id.Value, Existe: true, DataRef: null, Campos: [])));
 
         var handler = CriarHandler(repository);
 
@@ -341,7 +370,7 @@ public sealed class GetPrecosAsOfQueryHandlerTests
         var item = Assert.Single(resultado.Value.Items);
         Assert.Equal("td:a", item.InstrumentoId);
         var chamada = Assert.Single(repository.AsOfCalls);
-        Assert.Equal(["td:a"], chamada);
+        Assert.Equal(["td:a"], chamada.Select(id => id.Value));
     }
 
     [Fact]
@@ -349,8 +378,8 @@ public sealed class GetPrecosAsOfQueryHandlerTests
     {
         var repository = new FakePrecosAsOfReadRepository(
             asOf: (ids, _) => ids.ToDictionary(
-                id => id,
-                id => new AsOfInstrumento(id, Existe: true, DataRef: null, Campos: [])));
+                id => id.Value,
+                id => new AsOfInstrumento(id.Value, Existe: true, DataRef: null, Campos: [])));
 
         var handler = CriarHandler(repository);
 
@@ -368,10 +397,10 @@ public sealed class GetPrecosAsOfQueryHandlerTests
     {
         var repository = new FakePrecosAsOfReadRepository(
             asOf: (ids, _) => ids.ToDictionary(
-                id => id,
-                id => id == "td:desconhecido"
-                    ? new AsOfInstrumento(id, Existe: false, DataRef: null, Campos: [])
-                    : new AsOfInstrumento(id, Existe: true, DataRef: null, Campos: [])));
+                id => id.Value,
+                id => id.Value == "td:desconhecido"
+                    ? new AsOfInstrumento(id.Value, Existe: false, DataRef: null, Campos: [])
+                    : new AsOfInstrumento(id.Value, Existe: true, DataRef: null, Campos: [])));
 
         var handler = CriarHandler(repository);
 

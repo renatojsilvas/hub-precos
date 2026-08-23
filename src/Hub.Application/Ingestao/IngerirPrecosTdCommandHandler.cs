@@ -5,6 +5,8 @@ using Hub.Application.Eventos;
 using Hub.Application.Outbox;
 using Hub.Application.Precos;
 using Hub.Domain.Common;
+using Hub.Domain.Fontes;
+using Hub.Domain.Instrumentos;
 using Hub.Domain.Outbox;
 using Hub.Domain.Precos;
 using MediatR;
@@ -24,8 +26,6 @@ public sealed class IngerirPrecosTdCommandHandler(
     ILogger<IngerirPrecosTdCommandHandler> logger)
     : IRequestHandler<IngerirPrecosTdCommand, Result<IngestaoResultado>>
 {
-    private const string FonteTdApi = "td-api";
-    private const string ClasseTd = "td";
     private const string DataFormat = "yyyy-MM-dd";
 
     private const int JanelaDeltaDiasPadrao = 5;
@@ -49,7 +49,7 @@ public sealed class IngerirPrecosTdCommandHandler(
 
         if (!discovery.Value.FonteTemNovidade)
         {
-            var existeSemPrecoResult = await read.ExisteInstrumentoSemPrecoAsync(FonteTdApi, ClasseTd, ct);
+            var existeSemPrecoResult = await read.ExisteInstrumentoSemPrecoAsync(Fonte.TdApi, ClasseInstrumento.Td, ct);
             if (existeSemPrecoResult.IsFailure)
             {
                 logger.LogError(
@@ -78,7 +78,7 @@ public sealed class IngerirPrecosTdCommandHandler(
             }
         }
 
-        var watermarksResult = await read.ObterWatermarksAsync(FonteTdApi, ClasseTd, ct);
+        var watermarksResult = await read.ObterWatermarksAsync(Fonte.TdApi, ClasseInstrumento.Td, ct);
         if (watermarksResult.IsFailure)
         {
             logger.LogError(
@@ -173,7 +173,19 @@ public sealed class IngerirPrecosTdCommandHandler(
                 instrumentosDelta++;
             }
 
-            var revisoesResult = await read.ObterRevisoesCorrentesAsync(wm.InstrumentoId, FonteTdApi, dataInicio, ct);
+            var instrumentoIdResult = InstrumentoId.Create(wm.InstrumentoId);
+            if (instrumentoIdResult.IsFailure)
+            {
+                instrumentosComFalha++;
+                logger.LogWarning(
+                    "Watermark {InstrumentoId} não corresponde a nenhum InstrumentoId válido: {Code} - {Description}; " +
+                    "instrumento pulado neste ciclo, watermark cuida da retomada.",
+                    wm.InstrumentoId, instrumentoIdResult.Error.Code, instrumentoIdResult.Error.Description);
+                continue;
+            }
+
+            var revisoesResult = await read.ObterRevisoesCorrentesAsync(
+                instrumentoIdResult.Value, Fonte.TdApi, dataInicio, ct);
             if (revisoesResult.IsFailure)
             {
                 instrumentosComFalha++;
@@ -312,7 +324,7 @@ public sealed class IngerirPrecosTdCommandHandler(
 
         if (!ct.IsCancellationRequested)
         {
-            var eodResult = await read.ObterDataEodAsync(FonteTdApi, ClasseTd, hoje, ct);
+            var eodResult = await read.ObterDataEodAsync(Fonte.TdApi, ClasseInstrumento.Td, hoje, ct);
             if (eodResult.IsFailure)
             {
                 logger.LogWarning(
@@ -330,7 +342,7 @@ public sealed class IngerirPrecosTdCommandHandler(
                         logger.LogWarning(
                             "EodPricesReady para {Fechado} está sendo anunciado com {AtivosSemPreco} " +
                             "instrumento(s) ativo(s) da classe {Classe} sem preço algum recebido até agora.",
-                            fechado, eod.AtivosSemPreco, ClasseTd);
+                            fechado, eod.AtivosSemPreco, ClasseInstrumento.Td.Name);
                     }
 
                     var eventoEod = EventosFactory.ParaEodPricesReady(fechado, ClassesEod);
