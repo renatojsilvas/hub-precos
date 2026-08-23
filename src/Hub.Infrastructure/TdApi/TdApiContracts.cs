@@ -9,3 +9,5 @@ public sealed record PrecoTaxaResponse(
     decimal? PuCompra, decimal? PuVenda, decimal? PuBase);
 
 public sealed record TitulosResponse(bool NaoModificado, IReadOnlyList<TituloResponse> Titulos);
+
+public sealed record AncoraPrecos(DateOnly? PrimeiraData, int Total);

@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Logging;
 
-namespace Hub.Infrastructure.Tests.TdApi;
+namespace Hub.Infrastructure.Tests.Common;
 
 internal sealed class FakeLogger<T> : ILogger<T>
 {

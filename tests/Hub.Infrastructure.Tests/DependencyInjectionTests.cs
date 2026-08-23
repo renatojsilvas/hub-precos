@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Reflection;
 using Hub.Application.Common.Interfaces;
+using Hub.Infrastructure.Observability;
 using Hub.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -135,5 +136,17 @@ public sealed class DependencyInjectionTests
         var dbContextDataSource = dataSourceProperty.GetValue(npgsqlExtension);
 
         Assert.Same(registeredDataSource, dbContextDataSource);
+    }
+
+    [Fact]
+    public void AddInfrastructure_RegistraIBusinessMetricsComoBusinessMetrics()
+    {
+        var services = new ServiceCollection();
+        services.AddInfrastructure(BuildConfiguration());
+
+        using var provider = services.BuildServiceProvider();
+        var metrics = provider.GetRequiredService<IBusinessMetrics>();
+
+        Assert.IsType<BusinessMetrics>(metrics);
     }
 }
