@@ -77,7 +77,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script_stop: true
-          envs: HUB_APP_PASSWORD,HUB_API_KEY
+          envs: HUB_APP_PASSWORD,HUB_API_KEY,TD_API_KEY
           script: |
             set -e
             REPO_DIR=/opt/hub-precos
@@ -93,6 +93,15 @@ jobs:
             }
             docker ps --format '{{.Names}}' | grep -qx tesouro-direto-db || {
               echo "ERRO: container 'tesouro-direto-db' não está rodando — é o Postgres compartilhado (§12 do plano)."
+              docker ps --format '  {{.Names}}'
+              exit 1
+            }
+            docker ps --format '{{.Names}}' | grep -qx tesouro-direto-app || {
+              echo "ERRO: container 'tesouro-direto-app' não está rodando. É o alvo do smoke test de"
+              echo "      saída, lá no final deste deploy (TD_API_KEY contra a TD API); sem ele agora,"
+              echo "      o deploy pagaria build/up inteiros para só então falhar nesse smoke test com"
+              echo "      um diagnóstico enganoso — 'chave rejeitada' quando na verdade a TD API está"
+              echo "      fora do ar, reiniciando, ou em deploy próprio."
               docker ps --format '  {{.Names}}'
               exit 1
             }
@@ -118,7 +127,16 @@ jobs:
               exit 1
             fi
 
-            printf 'HUB_APP_PASSWORD=%s\nHUB_API_KEY=%s\n' "$HUB_APP_PASSWORD" "$HUB_API_KEY" > .env
+            TD_API_KEY="$(printf '%s' "$TD_API_KEY" | tr -d '\r\n')"
+            if [ -z "$TD_API_KEY" ]; then
+              echo "ERRO: secret TD_API_KEY vazio (ou só com quebras de linha). É a chave que o Hub"
+              echo "      ENVIA à TD API (direção oposta à HUB_API_KEY); sem ela o container sobe"
+              echo "      normalmente, o job de ingestão dispara a cada 15 min, e toda chamada a"
+              echo "      GET /v1/titulos recebe 401 — nenhum preço é ingerido, em silêncio."
+              exit 1
+            fi
+
+            printf 'HUB_APP_PASSWORD=%s\nHUB_API_KEY=%s\nTD_API_KEY=%s\n' "$HUB_APP_PASSWORD" "$HUB_API_KEY" "$TD_API_KEY" > .env
             chmod 600 .env
 
             echo "== provisionamento do banco =="
@@ -178,8 +196,23 @@ jobs:
             fi
             echo "    sem chave: 401 ok"
 
+            echo "== smoke test de saída (TD_API_KEY autentica CONTRA a TD API) =="
+            td_status=$(docker exec hub-precos-app curl -s -o /dev/null -w '%{http_code}' \
+              -H "X-Api-Key: $TD_API_KEY" http://tesouro-direto-app:8080/v1/titulos)
+            if [ "$td_status" != "200" ]; then
+              echo "ERRO: GET /v1/titulos na TD API (chamado de dentro do container do Hub, com a"
+              echo "      TD_API_KEY provisionada) não retornou 200 (retornou $td_status). Essa"
+              echo "      chave não é aceita pela TD API. Sem isso o job de ingestão continua"
+              echo "      abortando a cada ciclo — o Hub sobe healthy e serve listas vazias, sem"
+              echo "      erro visível de fora."
+              docker logs --tail 50 hub-precos-app || true
+              exit 1
+            fi
+            echo "    com TD_API_KEY contra a TD API: 200 ok"
+
             echo "== deploy concluído =="
             docker image prune -f
         env:
           HUB_APP_PASSWORD: ${{ secrets.HUB_APP_PASSWORD }}
           HUB_API_KEY: ${{ secrets.HUB_API_KEY }}
+          TD_API_KEY: ${{ secrets.TD_API_KEY }}
