@@ -247,6 +247,46 @@ public sealed class IngerirPrecosTdCommandHandlerIntegrationTests
     }
 
     [Fact]
+    public async Task Handle_FonteEmiteTaxaVendaZero_PersisteNaCanonicaComValorZeroENaoConta_ComoRejeitado()
+    {
+        var sufixo = $"taxa-venda-zero-{Guid.NewGuid():N}";
+        var codigo = $"codigo-{sufixo}";
+        var dataRef = new DateOnly(2026, 8, 10);
+
+        InstrumentoId instrumentoId;
+        using (var scopeSetup = _factory.Services.CreateScope())
+        {
+            var dbSetup = scopeSetup.ServiceProvider.GetRequiredService<AppDbContext>();
+            instrumentoId = await CriarInstrumentoComFonteAsync(dbSetup, sufixo, codigo);
+        }
+
+        IReadOnlyList<PriceObserved> Precos(string cod, DateOnly _) =>
+            cod == codigo
+                ? [new PriceObserved(
+                    instrumentoId, DataRef.Create(dataRef).Value, Campo.Create(Campos.TaxaVenda).Value,
+                    Fonte.Create("td-api").Value, 0m, Agora)]
+                : [];
+
+        using var scope = _factory.Services.CreateScope();
+        var handler = CriarHandler(scope.ServiceProvider, new FakePriceSourceAdapter(
+            new DiscoveryResultado(true, 0, 0, 0), Precos));
+
+        var resultado = await handler.Handle(new IngerirPrecosTdCommand(), CancellationToken.None);
+
+        Assert.True(resultado.IsSuccess);
+        Assert.Equal(1, resultado.Value.PrecosInseridos);
+        Assert.Equal(0, resultado.Value.PrecosRejeitados);
+
+        using var verify = _factory.Services.CreateScope();
+        var db = verify.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var precos = await db.Precos.Where(p => p.InstrumentoId == instrumentoId).ToListAsync();
+        var preco = Assert.Single(precos);
+        Assert.Equal(0m, preco.Valor);
+        Assert.Equal(Campos.TaxaVenda, preco.Campo.Value);
+    }
+
+    [Fact]
     public async Task AdicionarEodSeAusenteAsync_RespeitaOIndiceUnicoSemEstourarErroParaOChamador()
     {
         using var scope = _factory.Services.CreateScope();
