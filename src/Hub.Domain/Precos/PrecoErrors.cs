@@ -15,4 +15,10 @@ public static class PrecoErrors
 
     public static readonly Error RevisaoInvalida =
         new("Preco.RevisaoInvalida", "Revisao não pode ser negativa.");
+
+    public static readonly Error DataInvalida =
+        new("Preco.DataInvalida", "date é obrigatório e deve estar no formato yyyy-MM-dd.");
+
+    public static readonly Error InstrumentsInvalido =
+        new("Preco.InstrumentsInvalido", "instruments, quando informado, não pode resultar em uma lista vazia.");
 }

@@ -1,5 +1,3 @@
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using Hub.Domain.Common;
 
 namespace Hub.Domain.Instrumentos;
@@ -12,7 +10,7 @@ public sealed class Instrumento : Entity<InstrumentoId>
         DateOnly? ativoDesde,
         DateOnly? ativoAte,
         bool pagaCupom,
-        string metadados,
+        Metadados metadados,
         DateTimeOffset criadoEm)
         : base(id)
     {
@@ -30,10 +28,10 @@ public sealed class Instrumento : Entity<InstrumentoId>
     public DateOnly? AtivoDesde { get; }
     public DateOnly? AtivoAte { get; private set; }
     public bool PagaCupom { get; private set; }
-    public string Metadados { get; private set; }
+    public Metadados Metadados { get; private set; }
     public DateTimeOffset CriadoEm { get; }
 
-    public Result AtualizarCatalogo(string nomeExibicao, DateOnly? ativoAte, bool pagaCupom, string metadados)
+    public Result AtualizarCatalogo(string nomeExibicao, DateOnly? ativoAte, bool pagaCupom, Metadados metadados)
     {
         ArgumentNullException.ThrowIfNull(metadados);
 
@@ -50,35 +48,14 @@ public sealed class Instrumento : Entity<InstrumentoId>
         return Result.Success();
     }
 
-    public bool DifereDoCatalogo(string nomeExibicao, DateOnly? ativoAte, bool pagaCupom, string metadados) =>
-        NomeExibicao != nomeExibicao
-        || AtivoAte != ativoAte
-        || PagaCupom != pagaCupom
-        || MetadadosDiferem(metadados);
-
-    private bool MetadadosDiferem(string metadados)
+    public bool DifereDoCatalogo(string nomeExibicao, DateOnly? ativoAte, bool pagaCupom, Metadados metadados)
     {
-        var atual = TryParseJson(Metadados);
-        var novo = TryParseJson(metadados);
+        ArgumentNullException.ThrowIfNull(metadados);
 
-        if (atual is null || novo is null)
-        {
-            return !string.Equals(Metadados, metadados, StringComparison.Ordinal);
-        }
-
-        return !JsonNode.DeepEquals(atual, novo);
-    }
-
-    private static JsonNode? TryParseJson(string json)
-    {
-        try
-        {
-            return JsonNode.Parse(json);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
+        return NomeExibicao != nomeExibicao
+            || AtivoAte != ativoAte
+            || PagaCupom != pagaCupom
+            || Metadados != metadados;
     }
 
     public static Result<Instrumento> Create(
@@ -87,7 +64,7 @@ public sealed class Instrumento : Entity<InstrumentoId>
         DateOnly? ativoDesde,
         DateOnly? ativoAte,
         bool pagaCupom,
-        string metadados,
+        Metadados metadados,
         DateTimeOffset criadoEm)
     {
         ArgumentNullException.ThrowIfNull(id);

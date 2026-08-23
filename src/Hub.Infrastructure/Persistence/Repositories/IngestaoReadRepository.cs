@@ -92,7 +92,8 @@ public sealed class IngestaoReadRepository(NpgsqlDataSource dataSource, ILogger<
         catch (Exception ex)
         {
             logger.LogError(ex, "Falha ao obter watermarks para fonte {Fonte} classe {Classe}", fonte, classe);
-            return Result<IReadOnlyList<WatermarkInstrumento>>.Failure(IngestaoErrors.FalhaDeLeitura(ex.Message));
+            return Result<IReadOnlyList<WatermarkInstrumento>>.Failure(
+                IngestaoErrors.FalhaDeLeitura("Falha ao obter watermarks."));
         }
     }
 
@@ -125,7 +126,7 @@ public sealed class IngestaoReadRepository(NpgsqlDataSource dataSource, ILogger<
                 ex, "Falha ao obter revisões correntes para instrumento {InstrumentoId} fonte {Fonte}",
                 instrumentoId, fonte);
             return Result<IReadOnlyDictionary<(DateOnly DataRef, string Campo), RevisaoCorrente>>.Failure(
-                IngestaoErrors.FalhaDeLeitura(ex.Message));
+                IngestaoErrors.FalhaDeLeitura("Falha ao obter revisões correntes."));
         }
     }
 
@@ -157,7 +158,7 @@ public sealed class IngestaoReadRepository(NpgsqlDataSource dataSource, ILogger<
         catch (Exception ex)
         {
             logger.LogError(ex, "Falha ao obter data de fechamento EOD para fonte {Fonte} classe {Classe}", fonte, classe);
-            return Result<DataEod>.Failure(IngestaoErrors.FalhaDeLeitura(ex.Message));
+            return Result<DataEod>.Failure(IngestaoErrors.FalhaDeLeitura("Falha ao obter data de fechamento EOD."));
         }
     }
 
@@ -179,7 +180,7 @@ public sealed class IngestaoReadRepository(NpgsqlDataSource dataSource, ILogger<
         catch (Exception ex)
         {
             logger.LogError(ex, "Falha ao verificar instrumento sem preço para fonte {Fonte} classe {Classe}", fonte, classe);
-            return Result<bool>.Failure(IngestaoErrors.FalhaDeLeitura(ex.Message));
+            return Result<bool>.Failure(IngestaoErrors.FalhaDeLeitura("Falha ao verificar instrumento sem preço."));
         }
     }
 

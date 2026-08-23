@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using Hub.Application.Adapters;
 using Hub.Application.Ingestao;
 using Hub.Application.Tests.Common;
@@ -57,8 +56,7 @@ public sealed class IngerirPrecosTdCommandHandlerTests
 
     private static async IAsyncEnumerable<PriceObserved> CancelarAposPrimeiro(
         CancellationTokenSource cts,
-        IReadOnlyList<PriceObserved> itens,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        IReadOnlyList<PriceObserved> itens)
     {
         await Task.Yield();
 
@@ -70,7 +68,6 @@ public sealed class IngerirPrecosTdCommandHandlerTests
                 cts.Cancel();
             }
 
-            ct.ThrowIfCancellationRequested();
             yield return item;
             primeiro = false;
         }
@@ -487,8 +484,8 @@ public sealed class IngerirPrecosTdCommandHandlerTests
 
         var adapter = new FakePriceSourceAdapter(
             Result<DiscoveryResultado>.Success(new DiscoveryResultado(true, 0, 0, 0)),
-            (codigo, _, ct) => codigo == "cod-a"
-                ? CancelarAposPrimeiro(cts, [precoA1, precoA2], ct)
+            (codigo, _, _) => codigo == "cod-a"
+                ? CancelarAposPrimeiro(cts, [precoA1, precoA2])
                 : Como([]));
 
         var read = new FakeIngestaoReadRepository(
@@ -501,10 +498,40 @@ public sealed class IngerirPrecosTdCommandHandlerTests
 
         var excecao = await Record.ExceptionAsync(() => handler.Handle(new IngerirPrecosTdCommand(), cts.Token));
 
+        // O cancelamento é cooperativo: quando ct.IsCancellationRequested vira true dentro do
+        // await foreach, o item corrente (precoA2) é descartado sem processamento, mas o que já
+        // tinha sido lido antes do cancelamento (precoA1) segue até o flush final normalmente.
         Assert.Null(excecao);
-        Assert.Empty(precoWrite.Adicionados);
+        var preco = Assert.Single(precoWrite.Adicionados);
+        Assert.Equal(dataRef, preco.DataRef.Value);
         Assert.Single(adapter.FetchCalls);
         Assert.Equal("cod-a", adapter.FetchCalls.Single().Codigo);
+    }
+
+    [Fact]
+    public async Task Handle_TokenJaCanceladoAntesDoLaco_EncerraSemChamarFetchAsync()
+    {
+        var wmA = new WatermarkInstrumento("td:a", "cod-a", new DateOnly(2026, 8, 15), null);
+        var wmB = new WatermarkInstrumento("td:b", "cod-b", new DateOnly(2026, 8, 15), null);
+
+        var adapter = new FakePriceSourceAdapter(Result<DiscoveryResultado>.Success(new DiscoveryResultado(true, 0, 0, 0)));
+        var read = new FakeIngestaoReadRepository(
+            watermarksResult: Result<IReadOnlyList<WatermarkInstrumento>>.Success([wmA, wmB]));
+
+        var precoWrite = new FakePrecoWriteRepository();
+        var outboxWrite = new FakeOutboxWriteRepository();
+        var unitOfWork = new FakeUnitOfWork();
+        var handler = CriarHandler(adapter, read, precoWrite, outboxWrite, unitOfWork);
+
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        var excecao = await Record.ExceptionAsync(() => handler.Handle(new IngerirPrecosTdCommand(), cts.Token));
+
+        Assert.Null(excecao);
+        Assert.Empty(adapter.FetchCalls);
+        Assert.Empty(precoWrite.Adicionados);
+        Assert.Equal(0, unitOfWork.SaveChangesCalls);
     }
 
     [Fact]

@@ -47,7 +47,10 @@ public sealed class InstrumentoConfiguration : IEntityTypeConfiguration<Instrume
         builder.Property(i => i.Metadados)
             .HasColumnName("metadados")
             .HasColumnType("jsonb")
-            .IsRequired();
+            .IsRequired()
+            .HasConversion(
+                v => v.Value,
+                v => Metadados.Create(v).Value);
 
         builder.Property(i => i.CriadoEm)
             .HasColumnName("criado_em")

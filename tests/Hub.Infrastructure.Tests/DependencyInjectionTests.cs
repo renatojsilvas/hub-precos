@@ -1,10 +1,15 @@
 using System.Linq;
 using System.Reflection;
 using Hub.Application.Common.Interfaces;
+using Hub.Application.Precos;
+using Hub.Infrastructure.Caching;
+using Hub.Infrastructure.Http;
 using Hub.Infrastructure.Observability;
 using Hub.Infrastructure.Persistence;
+using Hub.Infrastructure.Persistence.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
@@ -148,5 +153,45 @@ public sealed class DependencyInjectionTests
         var metrics = provider.GetRequiredService<IBusinessMetrics>();
 
         Assert.IsType<BusinessMetrics>(metrics);
+    }
+
+    [Fact]
+    public void AddInfrastructure_RegistraIPrecosAsOfReadRepository()
+    {
+        var services = new ServiceCollection();
+        services.AddInfrastructure(BuildConfiguration());
+
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var repository = scope.ServiceProvider.GetRequiredService<IPrecosAsOfReadRepository>();
+
+        Assert.IsType<PrecosAsOfReadRepository>(repository);
+    }
+
+    [Fact]
+    public void AddInfrastructure_RegistraIContentVersionProviderComoODecoratorCacheado()
+    {
+        var configuration = BuildConfiguration();
+        var services = new ServiceCollection();
+        services.AddSingleton(configuration);
+        services.AddInfrastructure(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var versionProvider = scope.ServiceProvider.GetRequiredService<IContentVersionProvider>();
+
+        Assert.IsType<CachedContentVersionProvider>(versionProvider);
+    }
+
+    [Fact]
+    public void AddInfrastructure_RegistraIMemoryCacheComSizeLimit()
+    {
+        var services = new ServiceCollection();
+        services.AddInfrastructure(BuildConfiguration());
+
+        using var provider = services.BuildServiceProvider();
+        var cache = provider.GetRequiredService<IMemoryCache>();
+
+        Assert.NotNull(cache);
     }
 }

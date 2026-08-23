@@ -95,17 +95,17 @@ public sealed class TdApiAdapterTests
         var idA = InstrumentoId.Create("td:titulo-a").Value;
         var instrumentoA = Instrumento.Create(
             idA, "Tesouro Selic 2029-03-01", null, new DateOnly(2029, 3, 1), false,
-            """{"indexador":"selic","tipo":"Tesouro Selic"}""", Agora.AddDays(-10)).Value;
+            Metadados.Create("""{"indexador":"selic","tipo":"Tesouro Selic"}""").Value, Agora.AddDays(-10)).Value;
 
         var idB = InstrumentoId.Create("td:titulo-b").Value;
         var instrumentoB = Instrumento.Create(
             idB, "Tesouro Prefixado 2030-01-01", null, new DateOnly(2030, 1, 1), false,
-            """{"indexador":"prefixado","tipo":"Tesouro Prefixado"}""", Agora.AddDays(-10)).Value;
+            Metadados.Create("""{"indexador":"prefixado","tipo":"Tesouro Prefixado"}""").Value, Agora.AddDays(-10)).Value;
 
         var idC = InstrumentoId.Create("td:titulo-c").Value;
         var instrumentoC = Instrumento.Create(
             idC, "Tesouro IPCA+ 2035-01-01", null, new DateOnly(2035, 1, 1), true,
-            """{"indexador":"ipca","tipo":"Tesouro IPCA+"}""", Agora.AddDays(-10)).Value;
+            Metadados.Create("""{"indexador":"ipca","tipo":"Tesouro IPCA+"}""").Value, Agora.AddDays(-10)).Value;
 
         repository.Instrumentos.AddRange([instrumentoA, instrumentoB, instrumentoC]);
         repository.Fontes.AddRange([
@@ -206,12 +206,12 @@ public sealed class TdApiAdapterTests
         var idInalterado = InstrumentoId.Create("td:titulo-inalterado").Value;
         var instrumentoInalterado = Instrumento.Create(
             idInalterado, "Tesouro Selic 2029-03-01", null, new DateOnly(2029, 3, 1), false,
-            """{"indexador":"selic","tipo":"Tesouro Selic"}""", Agora.AddDays(-10)).Value;
+            Metadados.Create("""{"indexador":"selic","tipo":"Tesouro Selic"}""").Value, Agora.AddDays(-10)).Value;
 
         var idAtualizado = InstrumentoId.Create("td:titulo-atualizado").Value;
         var instrumentoAtualizado = Instrumento.Create(
             idAtualizado, "Tesouro Prefixado 2030-01-01", null, new DateOnly(2030, 1, 1), false,
-            """{"indexador":"prefixado","tipo":"Tesouro Prefixado"}""", Agora.AddDays(-10)).Value;
+            Metadados.Create("""{"indexador":"prefixado","tipo":"Tesouro Prefixado"}""").Value, Agora.AddDays(-10)).Value;
 
         repository.Instrumentos.AddRange([instrumentoInalterado, instrumentoAtualizado]);
         repository.Fontes.AddRange([
@@ -247,7 +247,7 @@ public sealed class TdApiAdapterTests
         var id = InstrumentoId.Create("td:titulo-existente").Value;
         var instrumentoExistente = Instrumento.Create(
             id, "Tesouro Selic 2029-03-01", null, new DateOnly(2029, 3, 1), false,
-            """{"indexador":"selic","tipo":"Tesouro Selic"}""", Agora.AddDays(-30)).Value;
+            Metadados.Create("""{"indexador":"selic","tipo":"Tesouro Selic"}""").Value, Agora.AddDays(-30)).Value;
 
         repository.Instrumentos.Add(instrumentoExistente);
         repository.Fontes.Add(InstrumentoFonte.Create(id, fonte, CodigoNaFonte.Create("titulo-existente").Value).Value);
@@ -276,7 +276,7 @@ public sealed class TdApiAdapterTests
         await adapter.DiscoverAsync(CancellationToken.None);
 
         var instrumento = Assert.Single(repository.Instrumentos);
-        var metadados = JsonDocument.Parse(instrumento.Metadados).RootElement;
+        var metadados = JsonDocument.Parse(instrumento.Metadados.Value).RootElement;
 
         Assert.Equal("ipca", metadados.GetProperty("indexador").GetString());
         Assert.Equal("Tesouro IPCA+", metadados.GetProperty("tipo").GetString());
