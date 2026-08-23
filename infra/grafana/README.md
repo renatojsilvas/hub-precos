@@ -84,7 +84,23 @@ Duas regras, grupo `hub-alertas`, pasta `HubPrecos`:
     15min, então a folga proporcional pede dezenas de minutos — 30m cobre um tick
     perdido mais um misfire. Não aperte este valor de volta para 15m achando frouxo.
 
-Sem `contactpoints.yaml` nem `policies.yaml` neste repo: as regras do Hub reusam o
-contact point `telegram-tesouro` do repo de referência por herança da policy raiz (que
-não tem rota por label), então já caem no mesmo Telegram sem precisar de configuração
-própria. Mexer em `policies.yaml` arriscaria silenciar o TD.
+Sem `contactpoints.yaml` nem `policies.yaml` neste repo: quem define o roteamento do
+Telegram é o repo de referência. Lá existem dois contact points para o MESMO bot e o
+MESMO chat id — `telegram-tesouro` e `telegram-hub` — diferindo só no `message`, que
+prefixa a origem (🟢 TESOURO DIRETO / 🔵 HUB DE PRECOS), para dar pra saber de qual
+serviço veio o alerta sem abrir o Grafana. O `policies.yaml` de lá tem uma rota FILHA
+casando `service = hub-precos` → `telegram-hub`; a raiz continua em `telegram-tesouro`,
+byte a byte igual a antes.
+
+**O label `service: hub-precos` destas regras virou contrato.** É ele que a rota filha
+casa lá no repo de referência. Quem remover ou renomear esse label aqui (nas duas regras
+deste arquivo) quebra o roteamento do lado de lá, sem erro visível na hora — o YAML
+continua válido, o `apply-cloud.sh` continua aplicando com sucesso, só o Telegram é que
+passa a rotular errado.
+
+**O modo de falha se o label não casar não é silêncio.** Roteamento do Alertmanager cai
+para o pai quando nenhuma rota filha casa, então o alerta do Hub ainda chega — só que
+pelo `telegram-tesouro`, com o prefixo do TD. O risco de um label divergente é mensagem
+mal identificada, não alerta perdido. Vale saber disso antes de sair caçando alerta
+sumido: se o Hub disparou e a mensagem apareceu com 🟢 TESOURO DIRETO, o alerta chegou —
+só o roteamento que desalinhou.
