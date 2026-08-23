@@ -1,0 +1,104 @@
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: hub-alertas
+    folder: HubPrecos
+    interval: 1m
+    rules:
+      - uid: hub-ingestao-falha
+        title: Hub — Falha de ingestão
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __DS_PROM__
+            model:
+              expr: increase(hub_ingestao_ciclos_total{job="hub-precos",outcome="failure"}[1h])
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 3
+                    type: gt
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        dashboardUid: ""
+        panelId: 0
+        noDataState: OK
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: Mais de 3 ciclos de ingestão TD falharam na última hora
+          description: O Hub roda o ciclo de ingestão a cada 15min (96x/dia); 3 falhas em 1h é metade dos ciclos da hora. Verifique os logs do TdIngestaoJob ("Ingestao TD API falhou") para o Error.Code/Description e o status do upstream do TD antes de escalar.
+        labels:
+          severity: warning
+          service: hub-precos
+        isPaused: false
+      - uid: hub-ingestao-frescor
+        title: Hub — Dado parado (frescor da ingestão)
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __DS_PROM__
+            model:
+              expr: time() - max(hub_ingestao_ultimo_sucesso_timestamp_seconds{job="hub-precos"})
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 3600
+                    type: gt
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        dashboardUid: ""
+        panelId: 0
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 30m
+        annotations:
+          summary: Sem ciclo de ingestão TD bem-sucedido há mais de 1h
+          description: >-
+            O Hub roda 24/7, sem janela de dia útil, então não há guarda de day_of_week
+            aqui. noDataState=Alerting de propósito — se o app reiniciar e nunca mais
+            tiver sucesso, o gauge some e a ausência de dado precisa soar, não calar.
+            O for de 30 minutos (não 15) é a margem sobre a cadência de quem alimenta a
+            métrica, não igual a ela — o cron é 0 0/15 * * * ? com
+            WithMisfireHandlingInstructionDoNothing(), então um restart que atravesse um
+            tick agendado pula aquele tick e só dispara no próximo, um gap real de ~30min
+            em deploy saudável; somado a noDataState=Alerting (o gauge some no restart),
+            um for de 15 minutos gritaria lobo a cada deploy. 30 minutos cobrem um tick
+            perdido mais um misfire. Compare com td-metricas-container-obsoletas do repo
+            de referência, que usa for de 5 minutos para uma métrica alimentada a cada
+            ~1min — 5x de folga sobre a cadência; aqui a cadência é 15min, então a folga
+            proporcional pede dezenas de minutos, não 15. Não aperte este valor de volta
+            para 15 minutos achando frouxo — verifique se o container hub-precos está de
+            pé (up job hub-precos), se o job está agendado no Quartz e os logs do último
+            ciclo. Este é o defeito de produção (ingestão falhando por dias, tabelas em 0
+            linhas, sem alerta) que motivou esta regra.
+        labels:
+          severity: critical
+          service: hub-precos
+        isPaused: false
