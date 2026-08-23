@@ -6,6 +6,7 @@ namespace Hub.API.Extensions;
 public static class ApiKeyGuard
 {
     private const string ConfigKey = "ApiKey:Key";
+    private const int MinKeyLength = 32;
 
     public static void Validate(string environmentName, string? configuredKey)
     {
@@ -19,6 +20,14 @@ public static class ApiKeyGuard
         {
             throw new InvalidOperationException(
                 $"Configuração inválida: '{ConfigKey}' está vazia em ambiente '{environmentName}'. {Hint}");
+        }
+
+        if (configuredKey.Length < MinKeyLength)
+        {
+            throw new InvalidOperationException(
+                $"Configuração inválida: '{ConfigKey}' tem {configuredKey.Length} caracteres em ambiente " +
+                $"'{environmentName}', abaixo do mínimo de {MinKeyLength}. {Hint} Para gerar uma chave forte: " +
+                "openssl rand -hex 32.");
         }
     }
 
