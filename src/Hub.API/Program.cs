@@ -3,6 +3,7 @@ using Prometheus;
 using Hub.API;
 using Hub.API.Endpoints;
 using Hub.API.Extensions;
+using Hub.API.Middleware;
 using Hub.Application;
 using Hub.Domain.Common;
 using Hub.Infrastructure;
@@ -18,6 +19,7 @@ builder.Services.AddApiServices();
 var app = builder.Build();
 
 ConnectionStringGuard.Validate(app.Configuration, app.Environment);
+ApiKeyGuard.Validate(app.Configuration, app.Environment);
 
 await app.InitializeDatabaseAsync();
 
@@ -35,6 +37,8 @@ app.UseSerilogDefaults();
 
 app.UseSwagger();
 app.UseSwaggerUI();
+
+app.UseMiddleware<ApiKeyMiddleware>();
 
 app.MapHealthChecks("/health");
 app.MapHealthChecks("/health/ready");

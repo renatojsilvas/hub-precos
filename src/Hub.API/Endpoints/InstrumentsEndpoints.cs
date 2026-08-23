@@ -48,7 +48,8 @@ public static class InstrumentsEndpoints
             "(page/pageSize, default 100, máx 500) sempre aplicada; X-Total-Count reflete o total após filtros; " +
             "Link só quando page é informado; ordem estável por id.")
         .Produces<IReadOnlyList<InstrumentoResponse>>()
-        .ProducesProblem(StatusCodes.Status400BadRequest);
+        .ProducesProblem(StatusCodes.Status400BadRequest)
+        .ProducesProblem(StatusCodes.Status401Unauthorized);
     }
 
     private static InstrumentoResponse ParaResponse(InstrumentoDto dto) => new(

@@ -12,12 +12,15 @@ public sealed class HttpMetricsExceptionOrderingTests : IClassFixture<HttpMetric
     private const string ThrowPath = "/_test/throw";
     private const string CountSeries = "http_requests_received_total";
     private const string DurationSeries = "http_request_duration_seconds_count";
+    private const string ApiKeyHeader = "X-Api-Key";
+    private const string ApiKey = "http-metrics-ordering-test-api-key";
 
     private readonly HttpClient _client;
 
     public HttpMetricsExceptionOrderingTests(OrderingWebFactory factory)
     {
         _client = factory.CreateClient();
+        _client.DefaultRequestHeaders.Add(ApiKeyHeader, ApiKey);
     }
 
     [Fact]
@@ -77,6 +80,7 @@ public sealed class HttpMetricsExceptionOrderingTests : IClassFixture<HttpMetric
                 {
                     ["Metrics:ExcludedPaths:0"] = "/health",
                     ["Metrics:ExcludedPaths:1"] = "/metrics",
+                    ["ApiKey:Key"] = "http-metrics-ordering-test-api-key",
                     ["ConnectionStrings:DefaultConnection"] = "Host=localhost;Database=fake;Username=fake;Password=fake"
                 });
             });

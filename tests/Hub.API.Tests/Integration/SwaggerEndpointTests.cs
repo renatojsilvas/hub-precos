@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using System.Linq;
 
 namespace Hub.API.Tests.Integration;
 
@@ -68,6 +69,31 @@ public sealed class SwaggerEndpointTests(ApiTestFactory factory)
         Assert.True(headers.TryGetProperty("ETag", out _), $"deveria documentar o header ETag.\n{body}");
         Assert.True(headers.TryGetProperty("X-Total-Count", out _), $"deveria documentar o header X-Total-Count.\n{body}");
         Assert.True(headers.TryGetProperty("Link", out _), $"deveria documentar o header Link.\n{body}");
+    }
+
+    [Fact]
+    public async Task GetSwaggerJson_ShouldDescribeApiKeySecurityScheme()
+    {
+        var response = await _client.GetAsync("/swagger/v1/swagger.json", CancellationToken.None);
+        var body = await response.Content.ReadAsStringAsync(CancellationToken.None);
+
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+
+        var securitySchemes = root.GetProperty("components").GetProperty("securitySchemes");
+        var apiKeyScheme = securitySchemes.GetProperty("ApiKey");
+
+        Assert.Equal("apiKey", apiKeyScheme.GetProperty("type").GetString());
+        Assert.Equal("header", apiKeyScheme.GetProperty("in").GetString());
+        Assert.Equal("X-Api-Key", apiKeyScheme.GetProperty("name").GetString());
+
+        Assert.True(root.TryGetProperty("security", out var documentSecurity),
+            $"o documento deveria ter um security requirement global referenciando ApiKey.\n{body}");
+        var referencesApiKeyScheme = documentSecurity.EnumerateArray()
+            .Any(requirement => requirement.TryGetProperty("ApiKey", out var apiKeyRequirement)
+                && apiKeyRequirement.ValueKind == JsonValueKind.Array);
+        Assert.True(referencesApiKeyScheme,
+            $"o security requirement global deveria referenciar o scheme ApiKey.\n{documentSecurity}");
     }
 
     [Fact]

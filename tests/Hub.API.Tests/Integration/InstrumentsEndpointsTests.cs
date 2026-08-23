@@ -16,7 +16,7 @@ public sealed class InstrumentsEndpointsTests
     public InstrumentsEndpointsTests(ApiTestFactory factory)
     {
         _factory = factory;
-        _client = factory.CreateClient();
+        _client = factory.CreateAuthenticatedClient();
     }
 
     private static string NovoId(string classe = "td") => $"{classe}:instr-http-{Guid.NewGuid():N}";

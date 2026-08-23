@@ -64,11 +64,12 @@ listados aqui só para a fila não terminar no F5. Vire cada um em `F` quando fo
 Levantadas durante F3–F5 e registradas na memória do projeto com o motivo e as
 alternativas rejeitadas. Nenhuma bloqueia o que está feito.
 
-- **Sem camada de autenticação.** O molde protege `/v1` com `ApiKeyMiddleware`; o Hub
-  não portou. Hoje é mitigado por isolamento de rede (o Hub não publica porta e o
-  nginx não tem rota para ele), mas qualquer container na `tesouro-net` chama os
-  endpoints sem credencial e não há como auditar quem chamou. Vira relevante no
-  primeiro endpoint de **escrita**.
+- ~~**Sem camada de autenticação.**~~ Resolvido: `ApiKeyMiddleware` (service key só,
+  sem tabela de client keys — o Hub não atende usuário final) protege `/v1/*` com
+  `X-Api-Key`, guarda de boot recusa subir com a chave vazia fora de
+  `Development`/`Testing`. Ver README.md "Autenticação". O rate limiter de falha de
+  autenticação do molde continua fora — ausência decidida, revisitar se o Hub deixar
+  de ser interno à rede docker.
 - **Réplica única obrigatória.** O Quartz usa store em memória; `[DisallowConcurrentExecution]`
   vale por processo. Escalar horizontalmente exige antes store persistente com
   clustering. Documentado no `README.md`.

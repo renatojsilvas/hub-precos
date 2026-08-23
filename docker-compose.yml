@@ -5,6 +5,7 @@ services:
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
       - ConnectionStrings__DefaultConnection=Host=db;Port=5432;Database=hub;Username=hub;Password=${HUB_APP_PASSWORD:?HUB_APP_PASSWORD é obrigatório no .env (senha da role hub da aplicação)}
+      - ApiKey__Key=${HUB_API_KEY:?HUB_API_KEY é obrigatório no .env (chave que o Hub exige de quem o chama)}
     ports:
       - "127.0.0.1:5080:8080"
     depends_on:
