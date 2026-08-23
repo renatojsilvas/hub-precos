@@ -7,7 +7,7 @@ namespace Hub.API.Tests.Integration;
 [Collection("api")]
 public sealed class ExceptionHandlerEndpointsTests(ApiTestFactory factory)
 {
-    private readonly HttpClient _client = factory.CreateClient();
+    private readonly HttpClient _client = factory.CreateAuthenticatedClient();
 
     [Fact]
     public async Task GetTestThrow_ShouldReturn500WithProblemJson()

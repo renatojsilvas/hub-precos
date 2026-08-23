@@ -63,6 +63,7 @@ public static class DependencyInjection
                 sp.GetRequiredService<IMemoryCache>(),
                 sp.GetRequiredService<IConfiguration>()));
         services.AddSingleton<IBusinessMetrics, BusinessMetrics>();
+        services.AddSingleton<IApiKeyMetrics, ApiKeyMetrics>();
 
         services.TryAddSingleton(TimeProvider.System);
 

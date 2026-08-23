@@ -6,6 +6,7 @@ services:
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
       - ConnectionStrings__DefaultConnection=Host=${HUB_DB_HOST:-tesouro-direto-db};Port=5432;Database=${HUB_DB_NAME:-hub};Username=hub;Password=${HUB_APP_PASSWORD:?HUB_APP_PASSWORD é obrigatório (senha da role hub no Postgres compartilhado)}
+      - ApiKey__Key=${HUB_API_KEY:?HUB_API_KEY é obrigatório (chave que o Hub exige de quem o chama)}
       - Loki__Uri=${HUB_LOKI_URI:-http://alloy:3100}
       - TdApi__BaseUrl=${TD_API_BASE_URL:-http://tesouro-direto-app:8080/}
       - TdApi__ApiKey=${TD_API_KEY:-}

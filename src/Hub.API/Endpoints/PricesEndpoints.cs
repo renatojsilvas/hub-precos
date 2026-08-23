@@ -52,7 +52,8 @@ public static class PricesEndpoints
             "teto); X-Total-Count reflete o total de instrumentos distintos pedidos (ou do catálogo), não o " +
             "tamanho da página devolvida. 400 quando date está ausente ou mal formada.")
         .Produces<PrecosAsOfResponse>()
-        .ProducesProblem(StatusCodes.Status400BadRequest);
+        .ProducesProblem(StatusCodes.Status400BadRequest)
+        .ProducesProblem(StatusCodes.Status401Unauthorized);
     }
 
     private static string BuildPaginationLinkHeader(

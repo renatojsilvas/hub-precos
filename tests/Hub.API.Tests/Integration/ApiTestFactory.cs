@@ -9,7 +9,11 @@ namespace Hub.API.Tests.Integration;
 
 public sealed class ApiTestFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
+    public const string ApiKeyHeader = "X-Api-Key";
+    public const string ValidApiKey = "integration-test-api-key-0123456789";
+
     private const string ConnectionStringEnvVar = "ConnectionStrings__DefaultConnection";
+    private const string ApiKeyEnvVar = "ApiKey__Key";
 
     private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:16-alpine")
         .Build();
@@ -21,6 +25,7 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>, IAsyncLifet
             await _postgres.StartAsync();
 
             Environment.SetEnvironmentVariable(ConnectionStringEnvVar, _postgres.GetConnectionString());
+            Environment.SetEnvironmentVariable(ApiKeyEnvVar, ValidApiKey);
 
             using var scope = Services.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -59,6 +64,14 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>, IAsyncLifet
     private static void ClearEnvironmentVariables()
     {
         Environment.SetEnvironmentVariable(ConnectionStringEnvVar, null);
+        Environment.SetEnvironmentVariable(ApiKeyEnvVar, null);
+    }
+
+    public HttpClient CreateAuthenticatedClient()
+    {
+        var client = CreateClient();
+        client.DefaultRequestHeaders.Add(ApiKeyHeader, ValidApiKey);
+        return client;
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)

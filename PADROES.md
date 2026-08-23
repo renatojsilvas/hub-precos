@@ -71,6 +71,13 @@ justificativa registrada na memória.
 - Auth por API key em header, middleware global, paths isentos explícitos.
 - Rate limiting por config (`appsettings`), nunca hardcoded.
 - Segredos por variável de ambiente/secrets; nunca em código ou compose commitado.
+- Guarda de boot por credencial obrigatória: fora dos ambientes isentos, segredo
+  ausente **derruba o boot** — nunca significa "sem verificação". Guardas irmãs podem
+  isentar ambientes diferentes, e a resposta depende do que falta sem a credencial:
+  sem connection string a aplicação não sobe de jeito nenhum (isenta só `Testing`);
+  sem API key ela sobe e o middleware fica fail-closed nas rotas de negócio, o que é
+  útil localmente (isenta `Testing` e `Development`). Diferença deliberada — se
+  divergir, registre o porquê. Ref: `API/Extensions/{ConnectionStringGuard,ApiKeyGuard}.cs`
 
 ## 7. Observabilidade e operação
 

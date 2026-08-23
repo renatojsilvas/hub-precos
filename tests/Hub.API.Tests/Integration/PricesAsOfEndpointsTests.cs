@@ -19,7 +19,7 @@ public sealed class PricesAsOfEndpointsTests
     public PricesAsOfEndpointsTests(ApiTestFactory factory)
     {
         _factory = factory;
-        _client = factory.CreateClient();
+        _client = factory.CreateAuthenticatedClient();
     }
 
     private static string NovoId(string classe = "td") => $"{classe}:asof-http-{Guid.NewGuid():N}";

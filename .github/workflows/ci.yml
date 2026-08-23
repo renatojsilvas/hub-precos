@@ -37,6 +37,7 @@ jobs:
       - name: Compose config gate (sintaxe + tags existem no registry)
         env:
           HUB_APP_PASSWORD: dummy
+          HUB_API_KEY: dummy
         run: |
           set -e
           docker compose -f docker-compose.yml config -q
@@ -76,7 +77,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script_stop: true
-          envs: HUB_APP_PASSWORD
+          envs: HUB_APP_PASSWORD,HUB_API_KEY
           script: |
             set -e
             REPO_DIR=/opt/hub-precos
@@ -109,7 +110,15 @@ jobs:
               exit 1
             fi
 
-            printf 'HUB_APP_PASSWORD=%s\n' "$HUB_APP_PASSWORD" > .env
+            HUB_API_KEY="$(printf '%s' "$HUB_API_KEY" | tr -d '\r\n')"
+            if [ -z "$HUB_API_KEY" ]; then
+              echo "ERRO: secret HUB_API_KEY vazio (ou só com quebras de linha). É a chave que o Hub"
+              echo "      exige de quem o chama (X-Api-Key); sem ela o container sobe e o ApiKeyGuard"
+              echo "      derruba o boot em ambiente Production."
+              exit 1
+            fi
+
+            printf 'HUB_APP_PASSWORD=%s\nHUB_API_KEY=%s\n' "$HUB_APP_PASSWORD" "$HUB_API_KEY" > .env
             chmod 600 .env
 
             echo "== provisionamento do banco =="
@@ -120,7 +129,7 @@ jobs:
             alheios=$(for c in $outros; do
               docker inspect -f '{{range $n,$v := .NetworkSettings.Networks}}{{if eq $n "tesouro-net"}}{{range $v.Aliases}}{{.}}{{"\n"}}{{end}}{{end}}{{end}}' "$c" 2>/dev/null
             done | sort -u | grep -v '^$' || true)
-            for s in $(HUB_APP_PASSWORD=dummy docker compose -f docker-compose.prod.yml config --services); do
+            for s in $(HUB_APP_PASSWORD=dummy HUB_API_KEY=dummy docker compose -f docker-compose.prod.yml config --services); do
               if echo "$alheios" | grep -qx "$s"; then
                 echo "ERRO: o serviço '$s' colide com um alias DNS já registrado na rede tesouro-net"
                 echo "      por outro container. Subir assim faria o DNS do Docker alternar entre os"
@@ -146,7 +155,31 @@ jobs:
               exit 1
             }
 
+            echo "== smoke test autenticado (HUB_API_KEY realmente autentica) =="
+            protected_status=$(docker exec hub-precos-app curl -s -o /dev/null -w '%{http_code}' \
+              -H "X-Api-Key: $HUB_API_KEY" http://localhost:8080/v1/instruments)
+            if [ "$protected_status" != "200" ]; then
+              echo "ERRO: GET /v1/instruments com a HUB_API_KEY provisionada não retornou 200"
+              echo "      (retornou $protected_status). A chave do secret HUB_API_KEY diverge da"
+              echo "      chave que a aplicação está aceitando."
+              docker logs --tail 50 hub-precos-app || true
+              exit 1
+            fi
+            echo "    com HUB_API_KEY: 200 ok"
+
+            unauthenticated_status=$(docker exec hub-precos-app curl -s -o /dev/null -w '%{http_code}' \
+              http://localhost:8080/v1/instruments)
+            if [ "$unauthenticated_status" != "401" ]; then
+              echo "ERRO: GET /v1/instruments SEM chave não retornou 401 (retornou"
+              echo "      $unauthenticated_status). Isso significa que a autenticação por API key"
+              echo "      não está ativa e o deploy subiria servindo dados sem exigir credencial."
+              docker logs --tail 50 hub-precos-app || true
+              exit 1
+            fi
+            echo "    sem chave: 401 ok"
+
             echo "== deploy concluído =="
             docker image prune -f
         env:
           HUB_APP_PASSWORD: ${{ secrets.HUB_APP_PASSWORD }}
+          HUB_API_KEY: ${{ secrets.HUB_API_KEY }}

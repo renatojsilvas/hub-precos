@@ -26,19 +26,29 @@ O que **ainda não existe**: nenhum endpoint de negócio sob `/v1` (nem `GET
 Sobe banco e API já conectados entre si, sem precisar de SDK .NET local.
 
 ```bash
-cp .env.example .env   # preencha HUB_APP_PASSWORD
+cp .env.example .env   # preencha HUB_APP_PASSWORD e HUB_API_KEY
 docker compose up -d
 curl -sf http://127.0.0.1:5080/health/ready && echo OK
+curl -sf -H "X-Api-Key: $(grep ^HUB_API_KEY= .env | cut -d= -f2)" http://127.0.0.1:5080/v1/instruments
 ```
 
-O compose falha o boot se `HUB_APP_PASSWORD` estiver vazio (`${VAR:?}`). Esse valor é
-a senha da role de aplicação `hub`: o serviço `db` a usa para provisionar a role
-(hook `infra/postgres/initdb/01-provision-hub.sh`, ver
-[`infra/postgres/README.md`](infra/postgres/README.md)), e o serviço `app` a usa para
-montar `ConnectionStrings__DefaultConnection` (`Host=db;Port=5432`, a rede interna do
-compose) — a mesma senha nos dois lados, senão a autenticação falha. Esse caminho não
-usa `dotnet user-secrets` em nenhum momento; a credencial chega só por variável de
-ambiente.
+O compose falha o boot se `HUB_APP_PASSWORD` ou `HUB_API_KEY` estiverem vazios
+(`${VAR:?}`). São dois segredos com papéis diferentes:
+
+- `HUB_APP_PASSWORD` é a senha da role de aplicação `hub`: o serviço `db` a usa para
+  provisionar a role (hook `infra/postgres/initdb/01-provision-hub.sh`, ver
+  [`infra/postgres/README.md`](infra/postgres/README.md)), e o serviço `app` a usa para
+  montar `ConnectionStrings__DefaultConnection` (`Host=db;Port=5432`, a rede interna do
+  compose) — a mesma senha nos dois lados, senão a autenticação no Postgres falha.
+- `HUB_API_KEY` é a chave que o Hub **exige** de quem o chama: todo request a `/v1/*`
+  precisa do header `X-Api-Key` com esse valor, ou recebe `401`
+  (`src/Hub.API/Middleware/ApiKeyMiddleware.cs`). Ela chega ao container como
+  `ApiKey__Key`. **Não é a mesma chave que `TD_API_KEY`** (abaixo, opcional): aquela é
+  a chave que o Hub **envia** para autenticar contra a TD API — direção oposta, sem
+  relação uma com a outra.
+
+Esse caminho não usa `dotnet user-secrets` em nenhum momento; as credenciais chegam só
+por variável de ambiente.
 
 - `app` publicado em `http://127.0.0.1:5080` — Swagger em `http://127.0.0.1:5080/swagger`.
 - `db` publicado em `127.0.0.1:5433` — serve para `psql` e para o `dotnet run` local
@@ -76,6 +86,19 @@ quem define isso para o `dotnet run` — sem esse arquivo (ou rodando a API de o
 jeito, sem essa variável), o secret configurado no passo 2 é ignorado em silêncio e o
 boot falha por falta de credencial mesmo com o secret salvo.
 
+**`ApiKey:Key` não precisa de user-secrets em `Development`:** `ApiKeyGuard` (ver
+`src/Hub.API/Extensions/ApiKeyGuard.cs`) só recusa o boot com a chave vazia fora de
+`Development`/`Testing` — em `dotnet run` local a API sobe mesmo sem configurar nada,
+mas todo request a `/v1/*` continua exigindo o header `X-Api-Key`
+(`ApiKeyMiddleware` roda em todo ambiente, guarda de boot ou não). Como
+`appsettings.json` commita a chave vazia, qualquer requisição autenticada localmente
+falha até você configurar uma — mais simples via user-secrets:
+
+```bash
+dotnet user-secrets set "ApiKey:Key" "uma-chave-qualquer-para-dev" --project src/Hub.API
+curl -sf -H "X-Api-Key: uma-chave-qualquer-para-dev" http://localhost:5100/v1/instruments
+```
+
 `dotnet run` sobe em `http://localhost:5100` — porta fixa escolhida para não colidir
 com o AirPlay Receiver do macOS (porta 5000) nem com o `app` do compose (porta 5080).
 
@@ -102,6 +125,36 @@ Este repo segue os padrões catalogados em [`PADROES.md`](PADROES.md), herdados 
 repo de referência [`../tesouro-direto-api`](../tesouro-direto-api) — antes de criar
 qualquer estrutura nova (endpoint, repositório, job), localize o equivalente lá e
 siga o molde.
+
+## Autenticação
+
+Todo request sob `/v1/*` exige o header `X-Api-Key` com o valor configurado em
+`ApiKey:Key` (`ApiKey__Key` por variável de ambiente); sem ele, ou com valor errado,
+a resposta é `401` em `application/problem+json`, indistinguível entre "sem chave" e
+"chave errada" — não dá para descobrir por tentativa se uma chave existe.
+`/health`, `/health/ready`, `/health/live`, `/metrics` e `/swagger` são isentos
+(`ApiKey:ExcludedPaths`). A comparação é em tempo constante
+(`CryptographicOperations.FixedTimeEquals` sobre SHA-256), para não vazar por
+temporização se uma chave começa certa. Ver
+`src/Hub.API/Middleware/ApiKeyMiddleware.cs`.
+
+**Só existe a service key.** O molde de `tesouro-direto-api`
+(`src/TesouroDireto.API/Middleware/ApiKeyMiddleware.cs`) também aceita uma *client
+key* por usuário, resolvida numa tabela de API keys — o Hub não tem essa tabela e não
+atende usuário final (`plataforma-docs/ARQUITETURA.md` §4.5: "o Hub não é exposto ao
+front"), então só a chave única de serviço foi portada. Pelo mesmo motivo, o
+rate limiter de falha de autenticação do molde (`RateLimiting:AuthFailure`) também não
+foi portado: o Hub não tem rate limiting algum, não é exposto à internet (sem porta
+publicada em produção, sem rota no nginx) — revisitar se isso mudar.
+
+Fora de `Development`/`Testing`, o boot falha se `ApiKey:Key` estiver vazia
+(`src/Hub.API/Extensions/ApiKeyGuard.cs`, mesmo padrão do
+`ConnectionStringGuard`) — uma chave esquecida nunca vira "sem autenticação" em
+silêncio.
+
+**Não confundir com `TdApi:ApiKey`:** essa é a chave que o Hub *envia* para autenticar
+contra a TD API; `ApiKey:Key` é a chave que o Hub *exige* de quem o chama — direções
+opostas, sem relação uma com a outra. Ver `.env.example`.
 
 ## GET /v1/prices/asof
 
@@ -186,9 +239,13 @@ seguinte, porque o watermark é derivado de `MAX(data_ref)` e não existe como c
 (ADR-5). Não há estado de progresso para limpar junto.
 
 Segredos necessários em `Settings → Secrets and variables → Actions`: `VPS_HOST`,
-`VPS_USER`, `VPS_SSH_KEY` (chave privada dedicada ao deploy, não a pessoal) e
+`VPS_USER`, `VPS_SSH_KEY` (chave privada dedicada ao deploy, não a pessoal),
 `HUB_APP_PASSWORD` (senha da role `hub` no cluster compartilhado — distinta da do
-`.env` local, que é do container de desenvolvimento).
+`.env` local, que é do container de desenvolvimento) e `HUB_API_KEY` (a chave que o
+Hub em produção exige de quem o chama via `X-Api-Key` — também distinta do valor do
+`.env` local; sem ela o job de deploy escreve `HUB_API_KEY` vazio no `.env` remoto, o
+que o próprio job detecta e recusa antes de subir o container, e mesmo que chegasse a
+subir o `ApiKeyGuard` derrubaria o boot em `Production`).
 
 O job falha cedo se a rede `tesouro-net` ou o container `tesouro-direto-db` não
 existirem, antes de construir imagem ou tocar em qualquer container.

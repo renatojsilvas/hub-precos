@@ -31,6 +31,21 @@ public static class DependencyInjection
         services.AddSwaggerGen(c =>
         {
             c.SwaggerDoc("v1", new OpenApiInfo { Title = "Hub API", Version = "v1" });
+
+            var apiKeyScheme = new OpenApiSecurityScheme
+            {
+                Type = SecuritySchemeType.ApiKey,
+                In = ParameterLocation.Header,
+                Name = "X-Api-Key",
+                Description = "Chave de API obrigatória em todas as rotas de negócio.",
+                Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "ApiKey" },
+            };
+            c.AddSecurityDefinition("ApiKey", apiKeyScheme);
+            c.AddSecurityRequirement(new OpenApiSecurityRequirement
+            {
+                [apiKeyScheme] = Array.Empty<string>(),
+            });
+
             c.OperationFilter<PrecosAsOfOperationFilter>();
             c.OperationFilter<InstrumentsOperationFilter>();
         });

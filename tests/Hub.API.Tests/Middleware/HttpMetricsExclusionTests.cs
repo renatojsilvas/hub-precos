@@ -7,11 +7,15 @@ namespace Hub.API.Tests.Middleware;
 
 public sealed class HttpMetricsExclusionTests : IClassFixture<HttpMetricsExclusionTests.MetricsWebFactory>
 {
+    private const string ApiKeyHeader = "X-Api-Key";
+    private const string ApiKey = "http-metrics-exclusion-test-api-key";
+
     private readonly HttpClient _client;
 
     public HttpMetricsExclusionTests(MetricsWebFactory factory)
     {
         _client = factory.CreateClient();
+        _client.DefaultRequestHeaders.Add(ApiKeyHeader, ApiKey);
     }
 
     [Fact]
@@ -64,6 +68,7 @@ public sealed class HttpMetricsExclusionTests : IClassFixture<HttpMetricsExclusi
                     ["Metrics:ExcludedPaths:0"] = "/health",
                     ["Metrics:ExcludedPaths:1"] = "/metrics",
                     ["Metrics:ExcludedPaths:2"] = "/swagger",
+                    ["ApiKey:Key"] = "http-metrics-exclusion-test-api-key",
                     ["ConnectionStrings:DefaultConnection"] = "Host=localhost;Database=fake;Username=fake;Password=fake"
                 });
             });
