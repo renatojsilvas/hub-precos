@@ -45,9 +45,13 @@ O compose falha o boot se `HUB_APP_PASSWORD` ou `HUB_API_KEY` estiverem vazios
   (`src/Hub.API/Middleware/ApiKeyMiddleware.cs`). Ela chega ao container como
   `ApiKey__Key`. Precisa ter no mínimo 32 caracteres — `ApiKeyGuard` recusa o boot em
   `Production` com uma chave mais curta (ver seção Autenticação abaixo); gere uma com
-  `openssl rand -hex 32`. **Não é a mesma chave que `TD_API_KEY`** (abaixo, opcional):
-  aquela é a chave que o Hub **envia** para autenticar contra a TD API — direção
-  oposta, sem relação uma com a outra.
+  `openssl rand -hex 32`. `ApiKeyGuard` também recusa o boot se a chave contiver um
+  placeholder conhecido (`CHANGE-ME-IN-PRODUCTION`, `dev-local-key`,
+  `uma-chave-qualquer-para-dev`, com qualquer separador entre `-`, `_`, `.` ou
+  espaço), mesmo que o comprimento mínimo seja atingido — comprimento e conteúdo são
+  checagens independentes. **Não é a mesma chave que `TD_API_KEY`** (abaixo,
+  opcional): aquela é a chave que o Hub **envia** para autenticar contra a TD API —
+  direção oposta, sem relação uma com a outra.
 
 Esse caminho não usa `dotnet user-secrets` em nenhum momento; as credenciais chegam só
 por variável de ambiente.
@@ -89,7 +93,9 @@ jeito, sem essa variável), o secret configurado no passo 2 é ignorado em silê
 boot falha por falta de credencial mesmo com o secret salvo.
 
 **`ApiKey:Key` não precisa de user-secrets em `Development`:** `ApiKeyGuard` (ver
-`src/Hub.API/Extensions/ApiKeyGuard.cs`) só recusa o boot com a chave vazia fora de
+`src/Hub.API/Extensions/ApiKeyGuard.cs`) recusa o boot fora de `Development`/`Testing`
+por chave vazia, por conter um placeholder conhecido ou por ter menos de 32 caracteres
+(ver seção Autenticação abaixo) — nenhuma dessas três checagens roda em
 `Development`/`Testing` — em `dotnet run` local a API sobe mesmo sem configurar nada,
 mas todo request a `/v1/*` continua exigindo o header `X-Api-Key`
 (`ApiKeyMiddleware` roda em todo ambiente, guarda de boot ou não). Como
@@ -149,11 +155,14 @@ rate limiter de falha de autenticação do molde (`RateLimiting:AuthFailure`) ta
 foi portado: o Hub não tem rate limiting algum, não é exposto à internet (sem porta
 publicada em produção, sem rota no nginx) — revisitar se isso mudar.
 
-Fora de `Development`/`Testing`, o boot falha se `ApiKey:Key` estiver vazia ou tiver
-menos de 32 caracteres (`src/Hub.API/Extensions/ApiKeyGuard.cs`, mesmo padrão do
-`ConnectionStringGuard`) — uma chave esquecida ou curta demais (`123`, por exemplo)
-nunca vira "sem autenticação" em silêncio. Gere uma chave forte com
-`openssl rand -hex 32`.
+Fora de `Development`/`Testing`, o boot falha se `ApiKey:Key` estiver vazia, contiver
+um placeholder conhecido (`CHANGE-ME-IN-PRODUCTION`, `dev-local-key`,
+`uma-chave-qualquer-para-dev`, comparado ignorando separador — `-`, `_`, `.` ou
+espaço — e maiúsculas/minúsculas) ou tiver menos de 32 caracteres
+(`src/Hub.API/Extensions/ApiKeyGuard.cs`, mesmo padrão do `ConnectionStringGuard` para
+a checagem de vazia/comprimento) — uma chave esquecida, curta demais (`123`, por
+exemplo) ou deixada no placeholder de exemplo nunca vira "sem autenticação" em
+silêncio. Gere uma chave forte com `openssl rand -hex 32`.
 
 **Não confundir com `TdApi:ApiKey`:** essa é a chave que o Hub *envia* para autenticar
 contra a TD API; `ApiKey:Key` é a chave que o Hub *exige* de quem o chama — direções

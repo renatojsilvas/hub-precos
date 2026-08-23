@@ -27,7 +27,7 @@ public sealed class ApiKeyMiddleware
         _next = next;
         _logger = logger;
         _metrics = metrics;
-        _configuredKey = configuration["ApiKey:Key"] ?? string.Empty;
+        _configuredKey = (configuration["ApiKey:Key"] ?? string.Empty).Trim();
         _excludedPaths = configuration.GetSection("ApiKey:ExcludedPaths").Get<string[]>() ?? [];
     }
 
