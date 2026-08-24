@@ -6,10 +6,15 @@ services:
       - ASPNETCORE_ENVIRONMENT=Production
       - ConnectionStrings__DefaultConnection=Host=db;Port=5432;Database=hub;Username=hub;Password=${HUB_APP_PASSWORD:?HUB_APP_PASSWORD é obrigatório no .env (senha da role hub da aplicação)}
       - ApiKey__Key=${HUB_API_KEY:?HUB_API_KEY é obrigatório no .env (chave que o Hub exige de quem o chama)}
+      - RabbitMq__Host=plataforma-rabbitmq
+      - RabbitMq__User=${RABBITMQ_USER:-guest}
+      - RabbitMq__Password=${RABBITMQ_PASSWORD:-guest}
     ports:
       - "127.0.0.1:5080:8080"
     depends_on:
       db:
+        condition: service_healthy
+      plataforma-rabbitmq:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
@@ -17,6 +22,11 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
+    # app fica de fora da rede "plataforma" de propósito: "app" é um nome genérico e
+    # entrar numa rede compartilhada com esse nome é o incidente do PADROES.md §10.1
+    # (o front do tesouro-direto caiu no Hub por colisão de alias DNS). Quando
+    # custodia/operacoes chegarem, eles entram em "plataforma" com nomes prefixados
+    # pelo domínio, como plataforma-rabbitmq abaixo.
 
   db:
     image: postgres:16-alpine
@@ -39,5 +49,40 @@ services:
       retries: 10
       start_period: 10s
 
+  # Broker do relay outbox → mensageria (ARQUITETURA §4.4/§5). Nome prefixado pelo
+  # domínio ("plataforma-rabbitmq", não "rabbitmq"/"mq") porque o serviço entra na
+  # rede compartilhada "plataforma" — PADROES.md §10.1 documenta nome genérico
+  # colidindo em silêncio com outro serviço na mesma rede. O Hub só declara o
+  # exchange "prices"; fila e bindings são de quem consome (ver README.md).
+  plataforma-rabbitmq:
+    image: rabbitmq:4-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - rabbitmqdata:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - default
+      - plataforma
+
 volumes:
   pgdata:
+  rabbitmqdata:
+
+# "plataforma" é a rede compartilhada entre serviços de domínios diferentes (ver
+# PADROES.md §10.1). O "name: plataforma" é obrigatório: sem ele o Compose prefixa
+# com o nome do projeto (ex.: hub-precos_plataforma) e a rede deixa de ser a
+# combinada com os outros serviços da plataforma.
+networks:
+  plataforma:
+    name: plataforma

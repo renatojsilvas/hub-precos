@@ -14,6 +14,12 @@ internal sealed class FakeBusinessMetrics : IBusinessMetrics
 
     public List<long> InstrumentosComFalhaRegistrados { get; } = [];
 
+    public List<string> CiclosRelayRegistrados { get; } = [];
+
+    public long EventosPublicadosRegistrados { get; private set; }
+
+    public List<(long Pendentes, double IdadeSegundos)> BacklogRegistrado { get; } = [];
+
     public void RecordCicloIngestao(string outcome) => CiclosRegistrados.Add(outcome);
 
     public void RecordPrecosProcessados(string tipo, long quantidade) => PrecosRegistrados.Add((tipo, quantidade));
@@ -23,4 +29,11 @@ internal sealed class FakeBusinessMetrics : IBusinessMetrics
     public void RecordPrecoNovo() => PrecoNovoRegistrado++;
 
     public void RecordInstrumentosComFalha(long quantidade) => InstrumentosComFalhaRegistrados.Add(quantidade);
+
+    public void RecordCicloRelay(string outcome) => CiclosRelayRegistrados.Add(outcome);
+
+    public void RecordEventosPublicados(long quantidade) => EventosPublicadosRegistrados += quantidade;
+
+    public void RecordOutboxBacklog(long pendentes, double idadeSegundos) =>
+        BacklogRegistrado.Add((pendentes, idadeSegundos));
 }

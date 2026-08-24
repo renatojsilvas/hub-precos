@@ -10,6 +10,10 @@ services:
       - Loki__Uri=${HUB_LOKI_URI:-http://alloy:3100}
       - TdApi__BaseUrl=${TD_API_BASE_URL:-http://tesouro-direto-app:8080/}
       - TdApi__ApiKey=${TD_API_KEY:-}
+      - RabbitMq__Host=plataforma-rabbitmq
+      - RabbitMq__User=${RABBITMQ_USER:?RABBITMQ_USER é obrigatório (usuário do broker plataforma-rabbitmq; guest não é aceito fora de localhost)}
+      - RabbitMq__Password=${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD é obrigatório (senha do broker plataforma-rabbitmq)}
+      - Outbox__Relay__AgendamentoAtivo=${HUB_RELAY_ATIVO:-true}
 
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
@@ -18,9 +22,129 @@ services:
       retries: 10
       start_period: 90s
 
+    # SEM `condition: service_healthy` no broker, de propósito — segunda vez que
+    # esse acoplamento tenta entrar aqui. O relay outbox foi mantido FORA do
+    # `/health/ready` justamente para que um broker fora do ar não degradasse a
+    # API de leitura, que não depende do RabbitMQ (provado empiricamente: com o
+    # broker parado, nada é marcado, nada é perdido, o app segue `healthy`). Se
+    # o boot esperasse o broker ficar `service_healthy`, um broker doente
+    # impediria o Hub de subir — o mesmo acoplamento, por outra porta, e pior:
+    # no redeploy a API de preços ficaria fora do ar por causa do broker.
+    # `service_started` preserva a ORDEM de partida (o broker começa a subir
+    # antes do Hub) sem bloquear em broker doente.
+    depends_on:
+      plataforma-rabbitmq:
+        condition: service_started
+
     networks:
-      - tesouro-net
+      tesouro-net:
+      # O serviço continua se chamando "hub" (não renomear: é o alias DNS que a
+      # tesouro-net já usa para chegar até ele). Na rede nova "plataforma" o
+      # Compose registraria o mesmo alias "hub" por padrão — suficiente e já
+      # protegido pela guarda de colisão do CI (PADROES.md §10.1) — mas
+      # acrescentamos também um alias explícito e prefixado pelo domínio,
+      # coerente com o padrão que os outros serviços da plataforma (ex.:
+      # plataforma-rabbitmq abaixo) já seguem, para quem depender do Hub por
+      # nome não precisar depender do nome genérico do serviço.
+      plataforma:
+        aliases:
+          - hub-precos-app
+
+  # Broker do relay outbox → mensageria (ARQUITETURA §4.4/§5), agora ligado em
+  # produção. Nome "plataforma-rabbitmq" igual ao do docker-compose.yml local,
+  # de propósito: a config (Host, credenciais, exchange) não pode divergir
+  # entre ambientes só por causa do nome do container.
+  #
+  # RECURSOS CONTROLADOS NÃO É ENFEITE: a VPS tem 2GB de RAM no TOTAL,
+  # compartilhados com a TD API, o Postgres compartilhado, o alloy e o próprio
+  # Hub. Um RabbitMQ "default" nessa VPS é orçamento suficiente para derrubar
+  # os vizinhos.
+  #
+  # RECURSOS na forma CANÔNICA do Compose Spec (mesma que
+  # ../tesouro-direto-api/docker-compose.yml usa em todos os serviços com
+  # limite — `app`/`db`/`web`), não a legada (`mem_limit`/`cpus` soltos no
+  # serviço): as duas formas mapeiam para o MESMO campo do HostConfig e o
+  # Compose rejeita o projeto inteiro ("invalid compose project") se
+  # coexistirem com valores distintos no mesmo serviço — confirmado no molde,
+  # que teve que converter um overlay inteiro por causa disso. Por isso este
+  # serviço usa só `cpu_shares`/`memswap_limit` (não têm forma "canônica" fora
+  # do legado) e `deploy.resources.limits` (memória/CPU), nunca `mem_limit`/
+  # `cpus` soltos.
+  #
+  # `cpu_shares: 512` é PESO relativo, não teto: CPU não se estoca, então um
+  # teto rígido estrangularia o broker mesmo com a VPS ociosa, justamente no
+  # burst de publisher confirms de um lote de 100 do relay — e latência de
+  # confirm vira outbox parada. 512 fica abaixo dos 1024 de `app`/`db` do
+  # molde (o Hub e o Postgres compartilhado pesam mais) e igual ao `web`.
+  # `deploy.resources.limits.cpus: "0.60"` é um teto FOLGADO, só para conter
+  # loop desgovernado, na mesma leitura que o molde registra — não é para
+  # racionar.
+  #
+  # `deploy.resources.limits.memory` trava o CONTAINER em 384MiB (cgroup).
+  # Isso por si só NÃO basta: o RabbitMQ tem o próprio "high watermark" de
+  # memória, que por padrão é RELATIVO (0.4 = 40%) e relativo ao total do
+  # HOST, não ao limite do container — ele não enxerga cgroup. Nesta VPS isso
+  # leria 2GB e reservaria ~800MB de watermark DENTRO de um cgroup travado em
+  # 384MiB: o kernel mata o processo por OOM antes do watermark do RabbitMQ
+  # ter chance de aplicar backpressure (que é o mecanismo que deveria evitar
+  # o OOM, não correr atrás dele). Por isso o watermark abaixo é um valor
+  # ABSOLUTO (256MiB, com folga sob os 384MiB para o resto do processo
+  # Erlang/RabbitMQ, que não é só heap de mensagem).
+  #
+  # `memswap_limit` = `memory` (384m), igual ao molde faz em `app`/`db`: sem
+  # fixar isso, o Docker libera até 2x em swap em silêncio — para um broker
+  # isso trocaria OOM visível por latência arrastada, pior diagnóstico.
+  #
+  # O valor absoluto do watermark NÃO é configurável pela env var clássica
+  # (RABBITMQ_VM_MEMORY_HIGH_WATERMARK): a imagem rabbitmq:4 marcou essa env
+  # var como deprecated e o container recusa subir se ela estiver setada
+  # (confirmado rodando a imagem localmente). Por isso o valor entra por
+  # arquivo de config (ver infra/rabbitmq/conf.d/20-limits.conf), que também
+  # traz um limite de disco livre pelo mesmo motivo de orçamento.
+  plataforma-rabbitmq:
+    image: rabbitmq:4-management-alpine
+    container_name: hub-precos-rabbitmq
+    restart: unless-stopped
+    cpu_shares: 512
+    memswap_limit: 384m
+    deploy:
+      resources:
+        limits:
+          cpus: "0.60"
+          memory: 384m
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?RABBITMQ_USER é obrigatório (usuário do broker; guest não é aceito fora de localhost)}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD é obrigatório (senha do broker; guest não é aceito fora de localhost)}
+    # Só o management fica acessível, e só em loopback — para depurar via túnel
+    # SSH (`ssh -L 15672:127.0.0.1:15672 ...`), nunca pela internet. O AMQP
+    # (5672) NÃO é publicado: quem fala com o broker é só o Hub, pela rede
+    # docker interna (RabbitMq__Host=plataforma-rabbitmq), sem motivo para
+    # existir um caminho por fora do host.
+    ports:
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - rabbitmqdata:/var/lib/rabbitmq
+      - ./infra/rabbitmq/conf.d:/etc/rabbitmq/conf.d:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - plataforma
+
+volumes:
+  rabbitmqdata:
 
 networks:
   tesouro-net:
+    external: true
+  # "plataforma" é a rede compartilhada entre serviços de domínios diferentes
+  # (PADROES.md §10.1), NÃO propriedade do Hub — se este compose a criasse, um
+  # "docker compose down" do Hub a removeria por baixo dos outros serviços que
+  # também entrarem nela (custodia, operacoes). Quem a cria é o preflight do
+  # job de deploy (ver .github/workflows/ci.yml); external:true aqui só
+  # confirma que ela precisa existir antes do "up".
+  plataforma:
     external: true

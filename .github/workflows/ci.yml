@@ -34,10 +34,23 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
+      # Gate barato (segundos): a partir desta fase, docker-compose.prod.yml ganha o
+      # serviço plataforma-rabbitmq com ${RABBITMQ_USER:?...}/${RABBITMQ_PASSWORD:?...}
+      # obrigatórios (sem default guest em produção, de propósito). Este bloco env: é
+      # a ÚNICA fonte das obrigatórias aqui — o runner não tem `.env` (não é
+      # versionado); sem estas dummies o `config -q` do docker-compose.prod.yml abaixo
+      # falha e o job `test` reprova (mesma armadilha documentada no molde
+      # ../tesouro-direto-api/.github/workflows/deploy.yml para TD_APP_PASSWORD: o bug
+      # não aparece em teste local porque `docker compose` lê o `.env` do diretório
+      # automaticamente e mascara a variável faltante — para reproduzir a condição do
+      # CI use `--env-file /dev/null`). docker-compose.yml local não precisa de
+      # dummy para RABBITMQ_USER/PASSWORD: lá eles têm default (`:-guest`).
       - name: Compose config gate (sintaxe + tags existem no registry)
         env:
           HUB_APP_PASSWORD: dummy
           HUB_API_KEY: dummy
+          RABBITMQ_USER: dummy
+          RABBITMQ_PASSWORD: dummy
         run: |
           set -e
           docker compose -f docker-compose.yml config -q
@@ -77,7 +90,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script_stop: true
-          envs: HUB_APP_PASSWORD,HUB_API_KEY,TD_API_KEY
+          envs: HUB_APP_PASSWORD,HUB_API_KEY,TD_API_KEY,RABBITMQ_USER,RABBITMQ_PASSWORD
           script: |
             set -e
             REPO_DIR=/opt/hub-precos
@@ -90,6 +103,17 @@ jobs:
               echo "sem ela o Hub subiria numa rede isolada e não enxergaria o Postgres."
               docker network ls
               exit 1
+            }
+            # "plataforma" é diferente de "tesouro-net": é a rede da PLATAFORMA (hub-precos
+            # não é dono dela), criada aqui na primeira vez que qualquer serviço precisar
+            # dela — hoje é só o plataforma-rabbitmq do Hub, amanhã pode ser custodia ou
+            # operacoes. Por ser external:true no compose, o "up" abortaria se ela não
+            # existisse; diferente de tesouro-net, aqui não há por que abortar o deploy —
+            # criar é seguro e idempotente (docker network create falha alto se já existir
+            # e o inspect acima já filtrou esse caso).
+            docker network inspect plataforma >/dev/null 2>&1 || {
+              echo "rede docker 'plataforma' não existe nesta VPS ainda — criando."
+              docker network create plataforma
             }
             docker ps --format '{{.Names}}' | grep -qx tesouro-direto-db || {
               echo "ERRO: container 'tesouro-direto-db' não está rodando — é o Postgres compartilhado (§12 do plano)."
@@ -136,33 +160,106 @@ jobs:
               exit 1
             fi
 
-            printf 'HUB_APP_PASSWORD=%s\nHUB_API_KEY=%s\nTD_API_KEY=%s\n' "$HUB_APP_PASSWORD" "$HUB_API_KEY" "$TD_API_KEY" > .env
+            RABBITMQ_USER="$(printf '%s' "$RABBITMQ_USER" | tr -d '\r\n')"
+            if [ -z "$RABBITMQ_USER" ]; then
+              echo "ERRO: secret RABBITMQ_USER vazio (ou só com quebras de linha). É o usuário do broker"
+              echo "      plataforma-rabbitmq; sem ele o compose falha o boot do serviço (sem default"
+              echo "      guest em produção, de propósito)."
+              exit 1
+            fi
+
+            RABBITMQ_PASSWORD="$(printf '%s' "$RABBITMQ_PASSWORD" | tr -d '\r\n')"
+            if [ -z "$RABBITMQ_PASSWORD" ]; then
+              echo "ERRO: secret RABBITMQ_PASSWORD vazio (ou só com quebras de linha). É a senha do broker"
+              echo "      plataforma-rabbitmq; sem ela o compose falha o boot do serviço."
+              exit 1
+            fi
+
+            # ATENÇÃO: este .env é reescrito POR COMPLETO a cada deploy — não é um merge com
+            # o que já existe na VPS. Qualquer variável obrigatória (${VAR:?...} no compose)
+            # que não entrar neste MESMO printf derruba o serviço no próximo "up", mesmo que
+            # a variável já tivesse valor num .env anterior — e no caso do TD_API_KEY a
+            # quebra é SILENCIOSA (o Hub sobe healthy, o job de ingestão dispara a cada 15
+            # min e serve listas vazias). Já houve incidente neste ecossistema com um script
+            # sobrescrevendo o .env com só parte das variáveis e reportando sucesso — as
+            # cinco têm que estar juntas aqui.
+            printf 'HUB_APP_PASSWORD=%s\nHUB_API_KEY=%s\nTD_API_KEY=%s\nRABBITMQ_USER=%s\nRABBITMQ_PASSWORD=%s\n' \
+              "$HUB_APP_PASSWORD" "$HUB_API_KEY" "$TD_API_KEY" "$RABBITMQ_USER" "$RABBITMQ_PASSWORD" > .env
             chmod 600 .env
 
             echo "== provisionamento do banco =="
             ./infra/postgres/provision-remote.sh
 
-            echo "== guarda de colisão de alias na tesouro-net =="
-            outros=$(docker ps --format '{{.Names}}' | grep -vx hub-precos-app || true)
-            alheios=$(for c in $outros; do
-              docker inspect -f '{{range $n,$v := .NetworkSettings.Networks}}{{if eq $n "tesouro-net"}}{{range $v.Aliases}}{{.}}{{"\n"}}{{end}}{{end}}{{end}}' "$c" 2>/dev/null
-            done | sort -u | grep -v '^$' || true)
-            for s in $(HUB_APP_PASSWORD=dummy HUB_API_KEY=dummy docker compose -f docker-compose.prod.yml config --services); do
-              if echo "$alheios" | grep -qx "$s"; then
-                echo "ERRO: o serviço '$s' colide com um alias DNS já registrado na rede tesouro-net"
-                echo "      por outro container. Subir assim faria o DNS do Docker alternar entre os"
-                echo "      dois, quebrando METADE das chamadas de ambos os lados, sem erro visível."
-                echo "      Renomeie o serviço em docker-compose.prod.yml para algo único na rede."
-                echo "      Aliases já registrados por terceiros:"
-                echo "$alheios" | sed 's/^/        /'
-                exit 1
+            echo "== backlog atual da outbox (informativo, não bloqueia o deploy) =="
+            # A outbox de produção vem sendo escrita desde a fase de ingestão sem ninguém
+            # ler (o relay só liga a partir deste deploy); pode haver backlog acumulado
+            # grande. Só logamos — o relay drena no próprio ritmo depois de subir.
+            outbox_pendentes=$(docker exec -i tesouro-direto-db \
+              psql -v ON_ERROR_STOP=1 -U postgres -d hub -tAc \
+              "SELECT COUNT(*) FROM outbox WHERE publicado_em IS NULL" 2>/dev/null | tr -d '[:space:]')
+            if [ -n "$outbox_pendentes" ]; then
+              echo "    outbox pendentes antes deste deploy: $outbox_pendentes"
+            else
+              echo "    não consegui ler o backlog da outbox agora (seguindo o deploy mesmo assim)."
+            fi
+
+            echo "== guarda de colisão de alias em redes compartilhadas =="
+            # Exclui os DOIS containers deste compose, não só o hub-precos-app: a partir
+            # deste deploy o projeto também sobe o hub-precos-rabbitmq, e num redeploy ele
+            # já estaria rodando com o alias "plataforma-rabbitmq" — sem excluí-lo aqui, o
+            # container se veria como "alien" de si mesmo e a guarda falsificaria colisão
+            # em todo deploy a partir do segundo.
+            outros=$(docker ps --format '{{.Names}}' | grep -vx -e hub-precos-app -e hub-precos-rabbitmq || true)
+            servicos=$(HUB_APP_PASSWORD=dummy HUB_API_KEY=dummy RABBITMQ_USER=dummy RABBITMQ_PASSWORD=dummy \
+              docker compose -f docker-compose.prod.yml config --services)
+            for rede in tesouro-net plataforma; do
+              if ! docker network inspect "$rede" >/dev/null 2>&1; then
+                echo "  '$rede': rede ainda não existe nesta VPS, pulando checagem de colisão."
+                continue
               fi
+
+              alheios=$(for c in $outros; do
+                docker inspect -f '{{range $n,$v := .NetworkSettings.Networks}}{{if eq $n "'"$rede"'"}}{{range $v.Aliases}}{{.}}{{"\n"}}{{end}}{{end}}{{end}}' "$c" 2>/dev/null
+              done | sort -u | grep -v '^$' || true)
+
+              for s in $servicos; do
+                if echo "$alheios" | grep -qx "$s"; then
+                  echo "ERRO: o serviço '$s' colide com um alias DNS já registrado na rede $rede"
+                  echo "      por outro container. Subir assim faria o DNS do Docker alternar entre os"
+                  echo "      dois, quebrando METADE das chamadas de ambos os lados, sem erro visível."
+                  echo "      Renomeie o serviço em docker-compose.prod.yml para algo único na rede."
+                  echo "      Aliases já registrados por terceiros em '$rede':"
+                  echo "$alheios" | sed 's/^/        /'
+                  exit 1
+                fi
+              done
+              echo "  '$rede': sem colisão"
             done
             echo "sem colisão"
 
             echo "== build e up =="
             docker compose -f docker-compose.prod.yml build
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
+
+            echo "== verificando que a credencial do broker REALMENTE autentica (PADROES §10.2/§10.3) =="
+            # Provisionar credencial sem testá-la é afirmar sem evidência (§10.2), e o teste
+            # tem que passar PELA REDE, nunca por "docker exec" no próprio broker nem por
+            # loopback (§10.3) — senão a verificação passaria mesmo com a credencial errada.
+            # Container cliente à parte, na rede "plataforma", batendo na API de management
+            # com a mesma credencial provisionada, do jeito que o Hub chegaria ao broker.
+            rabbit_auth_status=$(docker run --rm --network plataforma curlimages/curl:8.11.0 \
+              -s -o /dev/null -w '%{http_code}' \
+              -u "$RABBITMQ_USER:$RABBITMQ_PASSWORD" \
+              http://plataforma-rabbitmq:15672/api/whoami)
+            if [ "$rabbit_auth_status" != "200" ]; then
+              echo "ERRO: GET /api/whoami no management do plataforma-rabbitmq, autenticando pela rede"
+              echo "      'plataforma' com a credencial provisionada, não retornou 200 (retornou"
+              echo "      $rabbit_auth_status). RABBITMQ_USER/RABBITMQ_PASSWORD divergem do que o"
+              echo "      broker aceitou no boot."
+              docker logs --tail 50 hub-precos-rabbitmq || true
+              exit 1
+            fi
+            echo "    credencial do broker confere (200 em /api/whoami via rede 'plataforma')"
 
             echo "== esperando ficar healthy =="
             timeout 300 bash -c 'until [ "$(docker inspect -f "{{.State.Health.Status}}" hub-precos-app 2>/dev/null)" = "healthy" ]; do
@@ -210,9 +307,40 @@ jobs:
             fi
             echo "    com TD_API_KEY contra a TD API: 200 ok"
 
+            echo "== smoke test do relay outbox (prova que está rodando, não só registrado) =="
+            # hub_relay_ciclos_total{outcome="success"} só sobe quando RelayOutboxJob TERMINA
+            # um ciclo com sucesso. Zero ou ausente aqui significa relay morto (agendamento
+            # desligado) ou falhando em todo ciclo — silencioso do lado de fora, porque o
+            # health check acima não passa por essa rota nenhuma.
+            relay_sucesso=""
+            metrics=""
+            for _ in $(seq 1 12); do
+              metrics=$(docker exec hub-precos-app curl -sf http://localhost:8080/metrics || true)
+              valor=$(echo "$metrics" | grep '^hub_relay_ciclos_total{outcome="success"}' | awk '{print $2}')
+              valor=${valor%.*}
+              if [ -n "$valor" ] && [ "$valor" != "0" ]; then
+                relay_sucesso="$valor"
+                break
+              fi
+              sleep 5
+            done
+
+            if [ -z "$relay_sucesso" ]; then
+              echo "ERRO: hub_relay_ciclos_total{outcome=\"success\"} ausente ou zero em /metrics"
+              echo "      após 60s de espera (cadência do job é de segundos, não minutos)."
+              docker logs --tail 80 hub-precos-app || true
+              exit 1
+            fi
+            echo "    hub_relay_ciclos_total{outcome=\"success\"}=$relay_sucesso"
+
+            outbox_pendentes_pos=$(echo "$metrics" | grep '^hub_outbox_pendentes ' | awk '{print $2}')
+            echo "    hub_outbox_pendentes=${outbox_pendentes_pos:-desconhecido (métrica ainda não gravada)}"
+
             echo "== deploy concluído =="
             docker image prune -f
         env:
           HUB_APP_PASSWORD: ${{ secrets.HUB_APP_PASSWORD }}
           HUB_API_KEY: ${{ secrets.HUB_API_KEY }}
           TD_API_KEY: ${{ secrets.TD_API_KEY }}
+          RABBITMQ_USER: ${{ secrets.RABBITMQ_USER }}
+          RABBITMQ_PASSWORD: ${{ secrets.RABBITMQ_PASSWORD }}

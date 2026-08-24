@@ -58,9 +58,15 @@ E dois painéis de negócio merecem a mesma nota:
 - **Instrumentos com falha** é acumulado por `increase`, não instantâneo: falha parcial
   dentro de um ciclo "success" nunca aparecia nos logs de resumo antes desta métrica.
 
+Quatro painéis novos cobrem o relay outbox → RabbitMQ: **Backlog da outbox** (contagem,
+`hub_outbox_pendentes`), **Idade do backlog mais antigo** (`hub_outbox_pendente_mais_antiga_segundos`,
+a métrica que os alertas usam — contagem sobe e desce o tempo todo, transitório é
+normal; idade alta é o sintoma real), **Ciclos de relay por desfecho** e **Eventos
+publicados no broker**.
+
 ## Regras de alerta (`cloud/rules.yaml`)
 
-Duas regras, grupo `hub-alertas`, pasta `HubPrecos`:
+Quatro regras, grupo `hub-alertas`, pasta `HubPrecos`:
 
 - **Hub — Falha de ingestão**: mais de 3 ciclos de falha em 1h (metade dos 4 ciclos/hora
   do cron de 15min). `[1h] > 3`, não `[6h] > 0` como o TD, porque o TD importa 1x/dia e
@@ -83,6 +89,21 @@ Duas regras, grupo `hub-alertas`, pasta `HubPrecos`:
     métrica alimentada a cada ~1min, 5x de folga sobre a cadência. A cadência aqui é
     15min, então a folga proporcional pede dezenas de minutos — 30m cobre um tick
     perdido mais um misfire. Não aperte este valor de volta para 15m achando frouxo.
+- **Hub — Backlog da outbox envelhecido**: `max(hub_outbox_pendente_mais_antiga_segundos)
+  > 900` (15min), `for: 5m`, `noDataState: Alerting`. Idade, não contagem
+  (`hub_outbox_pendentes`) de propósito — backlog transitório é normal (o relay drena a
+  cada 5s), backlog VELHO é o sintoma. `noDataState: Alerting` pelo mesmo motivo da regra
+  de frescor: esta métrica só é gravada quando `RelayOutboxJob` termina um ciclo com
+  sucesso (`RelayResultado.PendentesRestantes` não nulo); ausência prolongada significa
+  que o relay nunca leu o backlog desde o boot — app fora do ar ou Postgres inacessível.
+- **Hub — Relay outbox falhando persistentemente**:
+  `increase(hub_relay_ciclos_total{outcome="failure"}[5m]) > 30`, `for: 5m`,
+  `noDataState: OK`. Existe porque a regra de idade do backlog acima NÃO cobre todo
+  cenário: quando o próprio ciclo do relay falha (RabbitMQ fora do ar, Postgres
+  inacessível), `RelayOutboxJob` só chama `RecordCicloRelay("failure")` —
+  `RecordOutboxBacklog` nunca é chamado nesse caminho, então o gauge de idade CONGELA no
+  último valor bom em vez de crescer. As duas regras juntas cobrem broker/DB fora do ar
+  (esta) e relay que lê mas não consegue drenar no ritmo (a de idade).
 
 Sem `contactpoints.yaml` nem `policies.yaml` neste repo: quem define o roteamento do
 Telegram é o repo de referência. Lá existem dois contact points para o MESMO bot e o
@@ -104,3 +125,26 @@ pelo `telegram-tesouro`, com o prefixo do TD. O risco de um label divergente é 
 mal identificada, não alerta perdido. Vale saber disso antes de sair caçando alerta
 sumido: se o Hub disparou e a mensagem apareceu com 🟢 TESOURO DIRETO, o alerta chegou —
 só o roteamento que desalinhou.
+
+## O relay outbox → RabbitMQ está ligado em produção — as duas regras de outbox passam a valer de verdade
+
+Até aqui, **Hub — Backlog da outbox envelhecido** e **Hub — Relay outbox falhando
+persistentemente** eram regras publicadas mas sem sinal real por trás: o broker não
+existia em produção, `Outbox:Relay:AgendamentoAtivo` nascia `false` lá, e as métricas
+que essas duas regras leem (`hub_outbox_pendente_mais_antiga_segundos`,
+`hub_relay_ciclos_total{outcome="failure"}`) nunca eram gravadas fora do ambiente
+local. Com o broker `plataforma-rabbitmq` no ar em produção e o relay ligado por
+padrão (`HUB_RELAY_ATIVO=true`), as duas passam a ter dado de verdade por trás —
+inclusive o pico transitório esperado no primeiro deploy, quando o relay drena de
+uma vez o backlog acumulado desde a fase de ingestão (ver seção "Relay outbox →
+RabbitMQ" do `README.md` da raiz).
+
+Isso não muda nada no fluxo de publicação: continua sendo o passo manual de copiar
+`cloud/rules.yaml` para `../tesouro-direto-api/infra/grafana/cloud/rules-hub.yaml` e
+rodar `apply-cloud.sh` de lá (ver seção acima) — só reforça que, a partir de agora,
+publicar essas regras sem o relay realmente ligado do outro lado significa publicar
+alerta cego (sempre `OK`/sem dado), e não publicá-las com o relay já ligado significa
+não ter alerta nenhum enquanto o backlog cresce em silêncio. Esta tarefa (habilitação
+em produção) **não** executou `apply-cloud.sh` nem copiou nada para o
+`tesouro-direto-api` — isso continua sendo o passo manual descrito acima, de
+responsabilidade de quem decidir publicar.
