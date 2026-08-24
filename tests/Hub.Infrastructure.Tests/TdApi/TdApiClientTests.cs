@@ -4,6 +4,7 @@ using Hub.Infrastructure.Http;
 using Hub.Infrastructure.TdApi;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Hub.Infrastructure.Tests.TdApi;
 
@@ -47,7 +48,7 @@ public sealed class TdApiClientTests
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton<IConfiguration>(configuration);
-        services.AddSingleton<IConditionalGetStore>(store ?? new BoundedConditionalGetStore());
+        services.AddSingleton<IConditionalGetStore>(store ?? CriarStore(configuration));
         services.AddHttpClient<ITdApiClient, TdApiClient>(client =>
         {
             client.BaseAddress = new Uri(BaseUrl);
@@ -58,6 +59,9 @@ public sealed class TdApiClientTests
         var provider = services.BuildServiceProvider();
         return provider.GetRequiredService<ITdApiClient>();
     }
+
+    private static BoundedConditionalGetStore CriarStore(IConfiguration configuration) =>
+        new(TimeProvider.System, configuration, NullLogger<BoundedConditionalGetStore>.Instance);
 
     [Fact]
     public async Task GetTitulosAsync_PrimeiraChamada_DesserializaCamposCamelCaseCorretamente()
@@ -101,7 +105,7 @@ public sealed class TdApiClientTests
                 return FakeHttpMessageHandler.NoContentResponse(HttpStatusCode.NotModified);
             });
 
-        var store = new BoundedConditionalGetStore();
+        var store = CriarStore(new ConfigurationBuilder().Build());
         var client = CreateClient(handler, store);
 
         var first = await client.GetTitulosAsync(CancellationToken.None);
