@@ -5,6 +5,7 @@ using Hub.Infrastructure.Tests.Resilience;
 using Hub.Infrastructure.TdApi;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Hub.Infrastructure.Tests.TdApi;
 
@@ -19,7 +20,8 @@ public sealed class TdApiClientResilienceTests
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton(configuration);
-        services.AddSingleton<IConditionalGetStore>(store ?? new BoundedConditionalGetStore());
+        services.AddSingleton<IConditionalGetStore>(
+            store ?? new BoundedConditionalGetStore(TimeProvider.System, configuration, NullLogger<BoundedConditionalGetStore>.Instance));
         services.AddHttpClient<ITdApiClient, TdApiClient>(client =>
         {
             var baseUrl = configuration["TdApi:BaseUrl"];
