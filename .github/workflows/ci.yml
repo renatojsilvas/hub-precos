@@ -22,7 +22,21 @@ jobs:
       - run: dotnet restore
       - run: dotnet build --no-restore
 
-      - run: dotnet test --no-build --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./test-results/coverage -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
+      # TESTCONTAINERS_RYUK_DISABLED: o Ryuk e um container auxiliar que o Testcontainers
+      # puxa do Docker Hub UMA VEZ por execucao para faxinar containers orfaos ao final.
+      # Num runner efemero ele nao tem funcao: a VM inteira e destruida junto com o job,
+      # entao nao ha orfao para limpar. O que ele tem e custo: vira ponto unico de falha
+      # para TODA a suite de integracao. Em 2026-08-24 o Docker Hub devolveu HTTP 500 ao
+      # servir o manifesto dele e 163 dos 208 testes de Hub.API.Tests quebraram juntos em
+      # 9,8s — inclusive os de Postgres, que nada tem a ver com o relay. A mesma falha ja
+      # tinha acontecido numa maquina local, com o container do Ryuk preso em "Created",
+      # com exatamente o mesmo placar 163/45.
+      # Fica ligado no desenvolvimento local (onde a maquina persiste e a faxina serve);
+      # aqui e desligado de proposito.
+      - name: Testes (com cobertura)
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+        run: dotnet test --no-build --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./test-results/coverage -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
 
       - name: Coverage gate (line >= 85%)
         run: python3 scripts/coverage-gate.py ./test-results/coverage --threshold 85 --verbose
@@ -247,15 +261,47 @@ jobs:
             # loopback (§10.3) — senão a verificação passaria mesmo com a credencial errada.
             # Container cliente à parte, na rede "plataforma", batendo na API de management
             # com a mesma credencial provisionada, do jeito que o Hub chegaria ao broker.
-            rabbit_auth_status=$(docker run --rm --network plataforma curlimages/curl:8.11.0 \
-              -s -o /dev/null -w '%{http_code}' \
-              -u "$RABBITMQ_USER:$RABBITMQ_PASSWORD" \
-              http://plataforma-rabbitmq:15672/api/whoami)
+            #
+            # POR QUE ISTO É UM LAÇO, e não uma chamada única: o "up -d" acima retorna assim
+            # que os containers ARRANCAM, não quando ficam prontos — e o depends_on do hub é
+            # service_started de propósito (broker doente não pode impedir a API de LEITURA
+            # de subir). O RabbitMQ leva dezenas de segundos para abrir os listeners nesta
+            # VPS. A versão anterior chamava o curl uma vez, ~6s depois do "Started", e o
+            # deploy de 2026-08-24 falhou com "Process exited with status 7" (curl: failed to
+            # connect) reportando credencial divergente quando o problema era só tempo.
+            #
+            # Esperar aqui pela CONDIÇÃO REAL (a API respondendo 200) é melhor que esperar o
+            # healthcheck do container: "rabbitmq-diagnostics check_running" fica verde antes
+            # de a 15672 aceitar conexão, então ele é um proxy, não a condição.
+            #
+            # 000 (não conectou) e 401 (credencial errada) são diagnósticos DIFERENTES: o
+            # primeiro merece nova tentativa, o segundo não melhora com espera — falhar rápido
+            # nele evita gastar 3 minutos para dar a mesma resposta.
+            docker pull -q curlimages/curl:8.11.0 >/dev/null 2>&1 || true
+            rabbit_auth_status=""
+            for _ in $(seq 1 36); do
+              rabbit_auth_status=$(docker run --rm --network plataforma curlimages/curl:8.11.0 \
+                -s -o /dev/null -w '%{http_code}' --max-time 10 \
+                -u "$RABBITMQ_USER:$RABBITMQ_PASSWORD" \
+                http://plataforma-rabbitmq:15672/api/whoami 2>/dev/null || true)
+              [ "$rabbit_auth_status" = "200" ] && break
+              [ "$rabbit_auth_status" = "401" ] && break
+              sleep 5
+            done
+            if [ "$rabbit_auth_status" = "401" ]; then
+              echo "ERRO: o management do plataforma-rabbitmq respondeu 401 para a credencial"
+              echo "      provisionada. O broker está DE PÉ e recusou usuário/senha:"
+              echo "      RABBITMQ_USER/RABBITMQ_PASSWORD divergem do que ele aceitou no boot."
+              echo "      Atenção: RABBITMQ_DEFAULT_USER/PASS só valem no PRIMEIRO boot, com o"
+              echo "      volume vazio — trocar o secret não rotaciona a credencial de um broker"
+              echo "      que já tem dados. Use rabbitmqctl change_password ou recrie o volume."
+              docker logs --tail 50 hub-precos-rabbitmq || true
+              exit 1
+            fi
             if [ "$rabbit_auth_status" != "200" ]; then
-              echo "ERRO: GET /api/whoami no management do plataforma-rabbitmq, autenticando pela rede"
-              echo "      'plataforma' com a credencial provisionada, não retornou 200 (retornou"
-              echo "      $rabbit_auth_status). RABBITMQ_USER/RABBITMQ_PASSWORD divergem do que o"
-              echo "      broker aceitou no boot."
+              echo "ERRO: o management do plataforma-rabbitmq não respondeu em ~3 min (último"
+              echo "      código: ${rabbit_auth_status:-vazio}; 000 = não conectou). O broker não"
+              echo "      subiu — isto NÃO é problema de credencial."
               docker logs --tail 50 hub-precos-rabbitmq || true
               exit 1
             fi
