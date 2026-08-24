@@ -1,9 +1,11 @@
 using System.Linq;
 using System.Reflection;
 using Hub.Application.Common.Interfaces;
+using Hub.Application.Outbox;
 using Hub.Application.Precos;
 using Hub.Infrastructure.Caching;
 using Hub.Infrastructure.Http;
+using Hub.Infrastructure.Messaging;
 using Hub.Infrastructure.Observability;
 using Hub.Infrastructure.Persistence;
 using Hub.Infrastructure.Persistence.Repositories;
@@ -193,5 +195,36 @@ public sealed class DependencyInjectionTests
         var cache = provider.GetRequiredService<IMemoryCache>();
 
         Assert.NotNull(cache);
+    }
+
+    [Fact]
+    public async Task AddInfrastructure_RegistraIEventPublisherComoRabbitMqEventPublisher()
+    {
+        var configuration = BuildConfiguration();
+        var services = new ServiceCollection();
+        services.AddSingleton(configuration);
+        services.AddInfrastructure(configuration);
+
+        await using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var publisher = scope.ServiceProvider.GetRequiredService<IEventPublisher>();
+
+        Assert.IsType<RabbitMqEventPublisher>(publisher);
+    }
+
+    [Fact]
+    public async Task AddInfrastructure_RegistraRabbitMqConnectionProviderComoSingleton()
+    {
+        var configuration = BuildConfiguration();
+        var services = new ServiceCollection();
+        services.AddSingleton(configuration);
+        services.AddInfrastructure(configuration);
+
+        await using var provider = services.BuildServiceProvider();
+        var first = provider.GetRequiredService<RabbitMqConnectionProvider>();
+        using var scope = provider.CreateScope();
+        var second = scope.ServiceProvider.GetRequiredService<RabbitMqConnectionProvider>();
+
+        Assert.Same(first, second);
     }
 }

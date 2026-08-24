@@ -17,6 +17,7 @@
     <PackageReference Include="Npgsql" Version="8.0.6" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.11" />
     <PackageReference Include="prometheus-net" Version="8.2.1" />
+    <PackageReference Include="RabbitMQ.Client" Version="7.2.2" />
     <PackageReference Include="Quartz.Extensions.Hosting" Version="3.14.0" />
   </ItemGroup>
 

@@ -41,4 +41,10 @@ internal sealed class FakeOutboxWriteRepository(List<string>? log = null) : IOut
         EodAdicionados.Add(mensagem);
         return Task.FromResult(Result.Success());
     }
+
+    public Task<Result<int>> MarcarPublicadosAsync(IReadOnlyList<long> ids, DateTimeOffset publicadoEm, CancellationToken ct)
+    {
+        _log.Add($"marcarPublicados:{ids.Count}");
+        return Task.FromResult(Result<int>.Success(ids.Count));
+    }
 }

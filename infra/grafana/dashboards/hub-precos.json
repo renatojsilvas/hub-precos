@@ -216,6 +216,58 @@
         { "expr": "sum by (tipo) (increase(hub_ingestao_precos_processados_total{job=\"hub-precos\"}[24h]))", "legendFormat": "{{tipo}}", "refId": "A" }
       ],
       "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 10 } }, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "Backlog da outbox",
+      "description": "Quantidade de mensagens da outbox ainda não publicadas. Transitório é normal (o relay drena a cada 5s); use o painel de idade do backlog para saber se é um problema de verdade.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 38 },
+      "targets": [
+        { "expr": "hub_outbox_pendentes{job=\"hub-precos\"}", "legendFormat": "pendentes", "refId": "A" }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "Idade do backlog mais antigo",
+      "description": "Segundos desde a criação da mensagem pendente mais antiga da outbox. Métrica de idade, não de contagem: backlog VELHO é o sintoma real. Threshold: 900s (15min), o gatilho do alerta Hub — Backlog da outbox envelhecido.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 38 },
+      "targets": [
+        { "expr": "hub_outbox_pendente_mais_antiga_segundos{job=\"hub-precos\"}", "legendFormat": "idade da mais antiga", "refId": "A" }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 300 }, { "color": "red", "value": 900 }] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Ciclos de relay por desfecho",
+      "description": "Contagem de ciclos de relay success/failure a cada 5 minutos. O alerta Hub — Relay outbox falhando persistentemente dispara acima de 30 falhas nos últimos 5m (metade dos até 60 ciclos possíveis no intervalo de 5s do relay).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 42 },
+      "targets": [
+        { "expr": "sum by (outcome) (increase(hub_relay_ciclos_total{job=\"hub-precos\"}[5m]))", "legendFormat": "{{outcome}}", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 10 } }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Eventos publicados no broker",
+      "description": "Eventos da outbox publicados com sucesso no RabbitMQ, por janela de 5 minutos.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 42 },
+      "targets": [
+        { "expr": "increase(hub_relay_eventos_publicados_total{job=\"hub-precos\"}[5m])", "legendFormat": "publicados", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 10 } }, "overrides": [] }
     }
   ]
 }

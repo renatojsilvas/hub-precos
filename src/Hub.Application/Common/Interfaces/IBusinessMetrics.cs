@@ -11,4 +11,10 @@ public interface IBusinessMetrics
     void RecordPrecoNovo();
 
     void RecordInstrumentosComFalha(long quantidade);
+
+    void RecordCicloRelay(string outcome);
+
+    void RecordEventosPublicados(long quantidade);
+
+    void RecordOutboxBacklog(long pendentes, double idadeSegundos);
 }

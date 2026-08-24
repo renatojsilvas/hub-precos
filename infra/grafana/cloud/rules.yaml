@@ -102,3 +102,110 @@ groups:
           severity: critical
           service: hub-precos
         isPaused: false
+      - uid: hub-outbox-backlog-velho
+        title: Hub — Backlog da outbox envelhecido
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __DS_PROM__
+            model:
+              expr: max(hub_outbox_pendente_mais_antiga_segundos{job="hub-precos"})
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 900
+                    type: gt
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        dashboardUid: ""
+        panelId: 0
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: Mensagem mais antiga da outbox pendente há mais de 15 minutos
+          description: >-
+            Idade (hub_outbox_pendente_mais_antiga_segundos), não contagem
+            (hub_outbox_pendentes) de propósito — backlog transitório é normal (o relay
+            drena a cada 5s, Outbox:Relay:IntervaloSegundos), backlog VELHO é o sintoma
+            real. 15 minutos (900s) é folga generosa sobre a cadência de 5s do relay: uma
+            mensagem só fica velha se algo está impedindo o dreno, não por variação normal
+            de carga. noDataState=Alerting de propósito, igual à regra Hub — Dado parado:
+            esta métrica só é gravada em RelayOutboxJob quando o ciclo termina com sucesso
+            (RelayResultado.PendentesRestantes não nulo); ausência prolongada dela
+            significa que o relay nunca conseguiu ler o backlog desde o boot — app fora do
+            ar ou Postgres inacessível — e isso precisa soar, não calar. Se este alerta
+            disparar com hub-relay-falha-persistente também firing, o problema é o broker
+            RabbitMQ ou o Postgres; se disparar sozinho, o relay está lendo mas não
+            drenando na velocidade necessária (lote/MaxLotesPorCiclo pequeno demais para o
+            volume, ou publish lento). Verifique os logs do RelayOutboxJob e o painel
+            "Ciclos de relay por desfecho".
+        labels:
+          severity: critical
+          service: hub-precos
+        isPaused: false
+      - uid: hub-relay-falha-persistente
+        title: Hub — Relay outbox falhando persistentemente
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __DS_PROM__
+            model:
+              expr: increase(hub_relay_ciclos_total{job="hub-precos",outcome="failure"}[5m])
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 30
+                    type: gt
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        dashboardUid: ""
+        panelId: 0
+        noDataState: OK
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: Mais de 30 ciclos de relay da outbox falharam nos últimos 5 minutos
+          description: >-
+            O relay roda a cada 5s (Outbox:Relay:IntervaloSegundos), até 60 ciclos
+            possíveis em 5m; 30 é metade, mesmo raciocínio proporcional de
+            hub-ingestao-falha. Esta regra existe porque o alerta de idade do backlog
+            (hub-outbox-backlog-velho) NÃO pega todo cenário: quando o próprio ciclo falha
+            (ex.: RabbitMQ fora do ar, retornando OutboxErrors.BrokerIndisponivel, ou
+            Postgres inacessível ao ler pendentes), RelayOutboxJob só chama
+            RecordCicloRelay("failure") — RecordOutboxBacklog nunca é chamado nesse
+            caminho, então o gauge de idade CONGELA no último valor bom em vez de crescer,
+            e pode ficar abaixo do threshold de idade por um bom tempo. noDataState=OK
+            porque RecordCicloRelay é chamado incondicionalmente a cada execução (sucesso
+            OU falha) enquanto o processo estiver de pé; ausência de dado aqui é "app não
+            está rodando", coberto por outro sinal (up), não por esta regra.
+        labels:
+          severity: critical
+          service: hub-precos
+        isPaused: false

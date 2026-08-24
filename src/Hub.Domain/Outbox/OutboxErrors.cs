@@ -12,4 +12,13 @@ public static class OutboxErrors
 
     public static readonly Error EodJaEmitido =
         new("OutboxMessage.EodJaEmitido", "EodPricesReady já foi emitido para esta data por outra execução.", ErrorType.Conflict);
+
+    public static Error FalhaDeLeitura(string detail) =>
+        new("Outbox.FalhaDeLeitura", detail);
+
+    public static readonly Error BrokerIndisponivel =
+        new("Outbox.BrokerIndisponivel", "Broker de mensageria indisponível para publicação da outbox.");
+
+    public static readonly Error FalhaAoMarcarPublicado =
+        new("Outbox.FalhaAoMarcarPublicado", "Falha ao marcar mensagens da outbox como publicadas.");
 }

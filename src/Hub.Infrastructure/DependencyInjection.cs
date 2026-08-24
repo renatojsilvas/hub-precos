@@ -7,7 +7,9 @@ using Hub.Application.Precos;
 using Hub.Infrastructure.Caching;
 using Hub.Infrastructure.Http;
 using Hub.Infrastructure.Ingestao;
+using Hub.Infrastructure.Messaging;
 using Hub.Infrastructure.Observability;
+using Hub.Infrastructure.Outbox;
 using Hub.Infrastructure.Persistence;
 using Hub.Infrastructure.Persistence.Repositories;
 using Hub.Infrastructure.TdApi;
@@ -52,7 +54,12 @@ public static class DependencyInjection
         services.AddScoped<IIngestaoReadRepository, IngestaoReadRepository>();
         services.AddScoped<IPrecoWriteRepository, PrecoWriteRepository>();
         services.AddScoped<IOutboxWriteRepository, OutboxWriteRepository>();
+        services.AddScoped<IOutboxReadRepository, OutboxReadRepository>();
         services.AddScoped<IPrecosAsOfReadRepository, PrecosAsOfReadRepository>();
+
+        services.AddSingleton<RabbitMqConnectionProvider>();
+        services.AddScoped<IEventPublisher, RabbitMqEventPublisher>();
+        services.AddSingleton<RelayOutboxFalhaLogThrottle>();
 
         services.AddMemoryCache(options => options.SizeLimit = MemoryCacheSizeLimit);
 
@@ -89,22 +96,36 @@ public static class DependencyInjection
         .UseHttpClientMetrics()
         .AddTdApiResilienceHandler(configuration);
 
-        var agendamentoAtivo = configuration.GetValue<bool?>("TdApi:AgendamentoAtivo") ?? true;
+        var tdAgendamentoAtivo = configuration.GetValue<bool?>("TdApi:AgendamentoAtivo") ?? true;
         var cron = configuration["TdApi:CronSchedule"] ?? "0 0/15 * * * ?";
+
+        var relayAgendamentoAtivo = configuration.GetValue<bool?>("Outbox:Relay:AgendamentoAtivo") ?? true;
+        var relayIntervaloSegundos = configuration.GetValue<int?>("Outbox:Relay:IntervaloSegundos") ?? 5;
 
         services.AddQuartz(q =>
         {
-            if (!agendamentoAtivo)
+            if (tdAgendamentoAtivo)
             {
-                return;
+                var tdJobKey = new JobKey("td-ingestao");
+                q.AddJob<TdIngestaoJob>(opts => opts.WithIdentity(tdJobKey));
+                q.AddTrigger(opts => opts
+                    .ForJob(tdJobKey)
+                    .WithIdentity("td-ingestao-trigger")
+                    .WithCronSchedule(cron, x => x.WithMisfireHandlingInstructionDoNothing()));
             }
 
-            var jobKey = new JobKey("td-ingestao");
-            q.AddJob<TdIngestaoJob>(opts => opts.WithIdentity(jobKey));
-            q.AddTrigger(opts => opts
-                .ForJob(jobKey)
-                .WithIdentity("td-ingestao-trigger")
-                .WithCronSchedule(cron, x => x.WithMisfireHandlingInstructionDoNothing()));
+            if (relayAgendamentoAtivo)
+            {
+                var relayJobKey = new JobKey("relay-outbox");
+                q.AddJob<RelayOutboxJob>(opts => opts.WithIdentity(relayJobKey));
+                q.AddTrigger(opts => opts
+                    .ForJob(relayJobKey)
+                    .WithIdentity("relay-outbox-trigger")
+                    .WithSimpleSchedule(x => x
+                        .WithIntervalInSeconds(relayIntervaloSegundos)
+                        .RepeatForever()
+                        .WithMisfireHandlingInstructionNextWithRemainingCount()));
+            }
         });
         services.AddQuartzHostedService(q => q.WaitForJobsToComplete = true);
 
