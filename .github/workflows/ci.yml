@@ -22,7 +22,21 @@ jobs:
       - run: dotnet restore
       - run: dotnet build --no-restore
 
-      - run: dotnet test --no-build --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./test-results/coverage -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
+      # TESTCONTAINERS_RYUK_DISABLED: o Ryuk e um container auxiliar que o Testcontainers
+      # puxa do Docker Hub UMA VEZ por execucao para faxinar containers orfaos ao final.
+      # Num runner efemero ele nao tem funcao: a VM inteira e destruida junto com o job,
+      # entao nao ha orfao para limpar. O que ele tem e custo: vira ponto unico de falha
+      # para TODA a suite de integracao. Em 2026-08-24 o Docker Hub devolveu HTTP 500 ao
+      # servir o manifesto dele e 163 dos 208 testes de Hub.API.Tests quebraram juntos em
+      # 9,8s — inclusive os de Postgres, que nada tem a ver com o relay. A mesma falha ja
+      # tinha acontecido numa maquina local, com o container do Ryuk preso em "Created",
+      # com exatamente o mesmo placar 163/45.
+      # Fica ligado no desenvolvimento local (onde a maquina persiste e a faxina serve);
+      # aqui e desligado de proposito.
+      - name: Testes (com cobertura)
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+        run: dotnet test --no-build --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./test-results/coverage -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
 
       - name: Coverage gate (line >= 85%)
         run: python3 scripts/coverage-gate.py ./test-results/coverage --threshold 85 --verbose
