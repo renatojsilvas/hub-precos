@@ -275,12 +275,17 @@ Segredos necessários em `Settings → Secrets and variables → Actions`: `VPS_
 Hub em produção exige de quem o chama via `X-Api-Key` — também distinta do valor do
 `.env` local; sem ela o job de deploy escreve `HUB_API_KEY` vazio no `.env` remoto, o
 que o próprio job detecta e recusa antes de subir o container, e mesmo que chegasse a
-subir o `ApiKeyGuard` derrubaria o boot em `Production`), e `RABBITMQ_USER` /
-`RABBITMQ_PASSWORD` (credenciais do broker `plataforma-rabbitmq` de produção —
-distintas das do `.env` local; sem elas o compose falha o boot dos serviços `hub` e
-`plataforma-rabbitmq`, de propósito: produção não aceita a credencial padrão `guest`
-da imagem oficial). O job normaliza os quatro segredos (`tr -d '\r\n'`) antes de
-qualquer uso e falha cedo, com mensagem explícita, se algum vier vazio.
+subir o `ApiKeyGuard` derrubaria o boot em `Production`), `TD_API_KEY` (a chave que o
+Hub em produção **envia** à TD API via `X-Api-Key` — direção oposta à `HUB_API_KEY`,
+sem relação com ela; sem esse secret o job de deploy recusa escrever o `.env` remoto e
+falha antes de subir o container, porque sem essa chave o job de ingestão dispara a
+cada 15 min e toda chamada à TD API recebe 401 — o Hub sobe healthy e serve listas
+vazias, sem erro visível de fora), e `RABBITMQ_USER` / `RABBITMQ_PASSWORD`
+(credenciais do broker `plataforma-rabbitmq` de produção — distintas das do `.env`
+local; sem elas o compose falha o boot dos serviços `hub` e `plataforma-rabbitmq`, de
+propósito: produção não aceita a credencial padrão `guest` da imagem oficial). O job
+normaliza os cinco segredos (`tr -d '\r\n'`) antes de qualquer uso e falha cedo, com
+mensagem explícita, se algum vier vazio.
 
 O job falha cedo se a rede `tesouro-net` ou o container `tesouro-direto-db` não
 existirem, antes de construir imagem ou tocar em qualquer container — a rede

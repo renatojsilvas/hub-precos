@@ -90,7 +90,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script_stop: true
-          envs: HUB_APP_PASSWORD,HUB_API_KEY,RABBITMQ_USER,RABBITMQ_PASSWORD
+          envs: HUB_APP_PASSWORD,HUB_API_KEY,TD_API_KEY,RABBITMQ_USER,RABBITMQ_PASSWORD
           script: |
             set -e
             REPO_DIR=/opt/hub-precos
@@ -120,6 +120,15 @@ jobs:
               docker ps --format '  {{.Names}}'
               exit 1
             }
+            docker ps --format '{{.Names}}' | grep -qx tesouro-direto-app || {
+              echo "ERRO: container 'tesouro-direto-app' não está rodando. É o alvo do smoke test de"
+              echo "      saída, lá no final deste deploy (TD_API_KEY contra a TD API); sem ele agora,"
+              echo "      o deploy pagaria build/up inteiros para só então falhar nesse smoke test com"
+              echo "      um diagnóstico enganoso — 'chave rejeitada' quando na verdade a TD API está"
+              echo "      fora do ar, reiniciando, ou em deploy próprio."
+              docker ps --format '  {{.Names}}'
+              exit 1
+            }
             echo "preflight ok"
 
             if [ ! -d .git ]; then
@@ -142,6 +151,15 @@ jobs:
               exit 1
             fi
 
+            TD_API_KEY="$(printf '%s' "$TD_API_KEY" | tr -d '\r\n')"
+            if [ -z "$TD_API_KEY" ]; then
+              echo "ERRO: secret TD_API_KEY vazio (ou só com quebras de linha). É a chave que o Hub"
+              echo "      ENVIA à TD API (direção oposta à HUB_API_KEY); sem ela o container sobe"
+              echo "      normalmente, o job de ingestão dispara a cada 15 min, e toda chamada a"
+              echo "      GET /v1/titulos recebe 401 — nenhum preço é ingerido, em silêncio."
+              exit 1
+            fi
+
             RABBITMQ_USER="$(printf '%s' "$RABBITMQ_USER" | tr -d '\r\n')"
             if [ -z "$RABBITMQ_USER" ]; then
               echo "ERRO: secret RABBITMQ_USER vazio (ou só com quebras de linha). É o usuário do broker"
@@ -160,11 +178,13 @@ jobs:
             # ATENÇÃO: este .env é reescrito POR COMPLETO a cada deploy — não é um merge com
             # o que já existe na VPS. Qualquer variável obrigatória (${VAR:?...} no compose)
             # que não entrar neste MESMO printf derruba o serviço no próximo "up", mesmo que
-            # a variável já tivesse valor num .env anterior. Já houve incidente neste
-            # ecossistema com um script sobrescrevendo o .env com só parte das variáveis e
-            # reportando sucesso — as quatro têm que estar juntas aqui.
-            printf 'HUB_APP_PASSWORD=%s\nHUB_API_KEY=%s\nRABBITMQ_USER=%s\nRABBITMQ_PASSWORD=%s\n' \
-              "$HUB_APP_PASSWORD" "$HUB_API_KEY" "$RABBITMQ_USER" "$RABBITMQ_PASSWORD" > .env
+            # a variável já tivesse valor num .env anterior — e no caso do TD_API_KEY a
+            # quebra é SILENCIOSA (o Hub sobe healthy, o job de ingestão dispara a cada 15
+            # min e serve listas vazias). Já houve incidente neste ecossistema com um script
+            # sobrescrevendo o .env com só parte das variáveis e reportando sucesso — as
+            # cinco têm que estar juntas aqui.
+            printf 'HUB_APP_PASSWORD=%s\nHUB_API_KEY=%s\nTD_API_KEY=%s\nRABBITMQ_USER=%s\nRABBITMQ_PASSWORD=%s\n' \
+              "$HUB_APP_PASSWORD" "$HUB_API_KEY" "$TD_API_KEY" "$RABBITMQ_USER" "$RABBITMQ_PASSWORD" > .env
             chmod 600 .env
 
             echo "== provisionamento do banco =="
@@ -273,6 +293,20 @@ jobs:
             fi
             echo "    sem chave: 401 ok"
 
+            echo "== smoke test de saída (TD_API_KEY autentica CONTRA a TD API) =="
+            td_status=$(docker exec hub-precos-app curl -s -o /dev/null -w '%{http_code}' \
+              -H "X-Api-Key: $TD_API_KEY" http://tesouro-direto-app:8080/v1/titulos)
+            if [ "$td_status" != "200" ]; then
+              echo "ERRO: GET /v1/titulos na TD API (chamado de dentro do container do Hub, com a"
+              echo "      TD_API_KEY provisionada) não retornou 200 (retornou $td_status). Essa"
+              echo "      chave não é aceita pela TD API. Sem isso o job de ingestão continua"
+              echo "      abortando a cada ciclo — o Hub sobe healthy e serve listas vazias, sem"
+              echo "      erro visível de fora."
+              docker logs --tail 50 hub-precos-app || true
+              exit 1
+            fi
+            echo "    com TD_API_KEY contra a TD API: 200 ok"
+
             echo "== smoke test do relay outbox (prova que está rodando, não só registrado) =="
             # hub_relay_ciclos_total{outcome="success"} só sobe quando RelayOutboxJob TERMINA
             # um ciclo com sucesso. Zero ou ausente aqui significa relay morto (agendamento
@@ -307,5 +341,6 @@ jobs:
         env:
           HUB_APP_PASSWORD: ${{ secrets.HUB_APP_PASSWORD }}
           HUB_API_KEY: ${{ secrets.HUB_API_KEY }}
+          TD_API_KEY: ${{ secrets.TD_API_KEY }}
           RABBITMQ_USER: ${{ secrets.RABBITMQ_USER }}
           RABBITMQ_PASSWORD: ${{ secrets.RABBITMQ_PASSWORD }}
