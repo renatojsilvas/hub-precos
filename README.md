@@ -17,13 +17,17 @@ A API sobe, aplica migration no boot e responde health/metrics/swagger. O schema
 discovery aditivo do universo, backfill por janelas, delta D-5, e gravação da
 canônica com evento na outbox na mesma transação.
 
-O que **ainda não existe**: nenhum endpoint de negócio sob `/v1` (nem `GET
-/prices/asof` nem o catálogo da §4.5), e o relay outbox → RabbitMQ da §4.4 — a outbox
-é escrita desde já, mas ninguém a lê ainda. É o item 2 da ordem de implementação.
+Os endpoints de negócio sob `/v1` existem (`GET /v1/instruments` e `GET
+/v1/prices/asof`), e o **relay outbox → RabbitMQ** da §4.4 também: um job Quartz lê a
+outbox a cada `Outbox:Relay:IntervaloSegundos` e publica no exchange `prices` — ver
+seção [Relay outbox → RabbitMQ](#relay-outbox--rabbitmq) abaixo.
+
+O que **ainda não existe**: o catálogo completo de instrumentos da §4.5.
 
 ## Rodar com Docker (caminho padrão)
 
-Sobe banco e API já conectados entre si, sem precisar de SDK .NET local.
+Sobe banco, broker RabbitMQ e API já conectados entre si, sem precisar de SDK .NET
+local.
 
 ```bash
 cp .env.example .env   # preencha HUB_APP_PASSWORD e HUB_API_KEY
@@ -59,6 +63,9 @@ por variável de ambiente.
 - `app` publicado em `http://127.0.0.1:5080` — Swagger em `http://127.0.0.1:5080/swagger`.
 - `db` publicado em `127.0.0.1:5433` — serve para `psql` e para o `dotnet run` local
   (abaixo), não para o `app` do compose (que fala com `db` pela rede interna, porta 5432).
+- `plataforma-rabbitmq` publicado em `127.0.0.1:5672` (AMQP) e `127.0.0.1:15672`
+  (management, usuário/senha de `RABBITMQ_USER`/`RABBITMQ_PASSWORD`, default
+  `guest`/`guest`) — ver seção [Relay outbox → RabbitMQ](#relay-outbox--rabbitmq).
 
 ## Rodar local para desenvolver (`dotnet run`)
 
@@ -209,6 +216,10 @@ Topologia de produção, diferente da local em dois pontos:
   `docker exec hub-precos-app curl -sf http://localhost:8080/health/ready` — `curl` a
   partir do host não tem por onde chegar.
 
+- **Broker com recursos travados.** `plataforma-rabbitmq` sobe junto, mas com
+  `cpu_shares`/`deploy.resources.limits` e watermark de memória absoluto — ver seção
+  [Relay outbox → RabbitMQ](#relay-outbox--rabbitmq) para o raciocínio completo (a
+  VPS tem 2GB de RAM no total).
 - **Uma réplica só, e isso não é negociável hoje.** O job de ingestão é agendado por
   Quartz com o store em memória (`RAMJobStore`), sem `UsePersistentStore` nem
   clustering. O `[DisallowConcurrentExecution]` que impede sobreposição vale **por
@@ -260,15 +271,126 @@ antecedência, não conserto.
 Segredos necessários em `Settings → Secrets and variables → Actions`: `VPS_HOST`,
 `VPS_USER`, `VPS_SSH_KEY` (chave privada dedicada ao deploy, não a pessoal),
 `HUB_APP_PASSWORD` (senha da role `hub` no cluster compartilhado — distinta da do
-`.env` local, que é do container de desenvolvimento) e `HUB_API_KEY` (a chave que o
+`.env` local, que é do container de desenvolvimento), `HUB_API_KEY` (a chave que o
 Hub em produção exige de quem o chama via `X-Api-Key` — também distinta do valor do
 `.env` local; sem ela o job de deploy escreve `HUB_API_KEY` vazio no `.env` remoto, o
 que o próprio job detecta e recusa antes de subir o container, e mesmo que chegasse a
-subir o `ApiKeyGuard` derrubaria o boot em `Production`).
+subir o `ApiKeyGuard` derrubaria o boot em `Production`), e `RABBITMQ_USER` /
+`RABBITMQ_PASSWORD` (credenciais do broker `plataforma-rabbitmq` de produção —
+distintas das do `.env` local; sem elas o compose falha o boot dos serviços `hub` e
+`plataforma-rabbitmq`, de propósito: produção não aceita a credencial padrão `guest`
+da imagem oficial). O job normaliza os quatro segredos (`tr -d '\r\n'`) antes de
+qualquer uso e falha cedo, com mensagem explícita, se algum vier vazio.
 
 O job falha cedo se a rede `tesouro-net` ou o container `tesouro-direto-db` não
-existirem, antes de construir imagem ou tocar em qualquer container.
+existirem, antes de construir imagem ou tocar em qualquer container — a rede
+`plataforma` (broker) é diferente: se ainda não existir na VPS, o job a cria (ela é
+compartilhada entre serviços de domínios diferentes, e o Hub não é dono dela).
+
+Depois do `up`, o job verifica a credencial do broker pela rede docker (nunca por
+loopback nem `docker exec` no próprio broker — ver PADROES.md §10.2/§10.3) e, depois
+do container ficar `healthy`, lê `/metrics` e exige
+`hub_relay_ciclos_total{outcome="success"} > 0`: prova que o relay está rodando de
+fato, não só registrado no DI. O job também loga a contagem de mensagens pendentes
+na outbox antes do `up` (backlog acumulado desde a fase de ingestão) e o valor de
+`hub_outbox_pendentes` depois do smoke test — só informativo, não bloqueia o deploy.
 
 **Sem rollback automático:** se a versão nova subir e não ficar `healthy`, o job falha
 e o container fica no ar quebrado — não volta sozinho para a anterior. Aceitável
 enquanto não há consumidor; resolver antes de existir.
+
+## Relay outbox → RabbitMQ
+
+Job Quartz (`RelayOutboxJob`) drena a tabela `outbox` a cada
+`Outbox:Relay:IntervaloSegundos` e publica no broker RabbitMQ, at-least-once
+(§4.4/§5 do plano de arquitetura). O relay confirma o maior prefixo contíguo do lote
+antes de marcar as linhas como publicadas — se o broker cair no meio de um lote, só o
+que foi confirmado é marcado, e o resto é reenviado no próximo ciclo.
+
+**Subir o broker localmente:** já incluso no `docker compose up -d` do caminho padrão
+(serviço `plataforma-rabbitmq`, imagem `rabbitmq:4-management-alpine`). Management UI
+em `http://127.0.0.1:15672` (usuário/senha de `RABBITMQ_USER`/`RABBITMQ_PASSWORD` no
+`.env`, default `guest`/`guest`). Rodando só com `dotnet run` (seção acima), suba o
+broker à parte: `docker compose up -d plataforma-rabbitmq`.
+
+**O Hub só declara o exchange `prices`** (tipo `topic`, durável) — fila e bindings são
+de responsabilidade de quem consome, não do Hub (um consumidor novo declara sua
+própria fila e faz o bind nas routing keys que interessam a ele; ver ARQUITETURA.md
+§5). Não existe fila `custodia.prices` nem nenhuma outra declarada por este repo.
+
+**A declaração do exchange é lazy, não acontece no boot.** `RabbitMqConnectionProvider`
+só abre a conexão com o broker (e só então declara o exchange `prices`) na primeira vez
+que `RelayOutboxJob` tem algo para publicar — outbox vazia significa que o Hub nunca
+chega a se conectar ao broker. Em um ambiente novo (deploy inicial, broker recém-criado),
+isso significa que o exchange `prices` **pode não existir ainda** quando um consumidor
+(ex.: Custódia) sobe pela primeira vez. Um consumidor que dependa de "o Hub já publicou
+alguma coisa, então o exchange existe" vai falhar de forma intermitente dependendo da
+ordem de subida. A declaração correta do lado do consumidor é declarar o próprio
+exchange `prices` (`topic`, `durable: true`, `autoDelete: false` — os mesmos parâmetros
+usados aqui, já que a declaração AMQP é idempotente quando os parâmetros batem, e falha
+com 406 quando não batem) **antes** de declarar a fila e os bindings, em vez de assumir
+que ele já foi criado pelo Hub.
+
+Chaves de `appsettings.json` que valem conhecer:
+
+| Chave | Default | Para que serve |
+|---|---|---|
+| `RabbitMq:Host` | `localhost` | Host do broker |
+| `RabbitMq:Port` | `5672` | Porta AMQP |
+| `RabbitMq:User` / `RabbitMq:Password` | `guest` / `guest` | Credenciais do broker |
+| `RabbitMq:VirtualHost` | `/` | Virtual host do broker |
+| `RabbitMq:Exchange` | `prices` | Exchange declarado pelo Hub |
+| `Outbox:Relay:TamanhoLote` | `100` | Linhas lidas da outbox por lote |
+| `Outbox:Relay:MaxLotesPorCiclo` | `50` | Teto de lotes drenados por execução do job |
+| `Outbox:Relay:IntervaloSegundos` | `5` | Cadência do job Quartz |
+| `Outbox:Relay:AgendamentoAtivo` | `true` | `false` desliga o agendamento (usado no ambiente de teste, e em produção até existir um broker acessível — ver `HUB_RELAY_ATIVO` no `.env.example`) |
+
+Em produção, o broker `plataforma-rabbitmq` sobe junto no `docker-compose.prod.yml`,
+com recursos deliberadamente travados — a VPS tem **2GB de RAM no total**,
+compartilhados com a TD API, o Postgres compartilhado, o `alloy` e o próprio Hub, e
+não há orçamento para um RabbitMQ "default":
+
+- **Forma canônica do Compose Spec** (mesma que `../tesouro-direto-api/docker-compose.yml`
+  usa em todos os serviços com limite), não a legada (`mem_limit`/`cpus` soltos no
+  serviço): `cpu_shares: 512` (PESO relativo — CPU não se estoca, então um teto rígido
+  estrangularia o broker mesmo com a VPS ociosa, justamente no burst de publisher
+  confirms de um lote de 100 do relay) + `deploy.resources.limits.cpus: "0.60"` (teto
+  FOLGADO, só para conter loop desgovernado) + `deploy.resources.limits.memory: 384m`
+  (teto rígido do container/cgroup) + `memswap_limit: 384m` (igual ao limite de
+  memória, senão o Docker libera até 2x em swap em silêncio).
+- **Watermark de memória interno do RabbitMQ como valor ABSOLUTO (256MiB), não
+  relativo.** O default do RabbitMQ é relativo (`0.4` = 40%) e lido sobre o total do
+  **HOST**, não sobre o limite do container — ele não enxerga cgroup. Nesta VPS isso
+  leria os 2GB inteiros e reservaria ~800MB de watermark dentro de um cgroup travado
+  em 384MiB: o kernel mata o processo por OOM antes do watermark ter chance de
+  aplicar backpressure, que é justamente o mecanismo que deveria evitar o OOM. Por
+  isso o valor é absoluto e com folga sob os 384MiB. **Não dá para configurar isso
+  pela env var clássica** `RABBITMQ_VM_MEMORY_HIGH_WATERMARK`: a imagem `rabbitmq:4`
+  marcou essa env var como deprecated e o container recusa subir se ela estiver
+  setada (confirmado empiricamente). O valor entra por arquivo de config — ver
+  `infra/rabbitmq/conf.d/20-limits.conf`, que também traz um limite de disco livre
+  pelo mesmo motivo de orçamento.
+- **Sem porta publicada para a internet.** O AMQP (5672) fica só na rede docker
+  interna (`RabbitMq__Host=plataforma-rabbitmq`) — nada além do Hub precisa falar
+  com o broker. Só o management fica acessível, e só em `127.0.0.1` da VPS (acesso
+  por túnel SSH: `ssh -L 15672:127.0.0.1:15672 <vps>`), nunca pela internet.
+- **Credenciais obrigatórias, sem default `guest`** — `RABBITMQ_USER`/
+  `RABBITMQ_PASSWORD` são secrets do job de deploy (ver seção
+  [Ingestão do Tesouro Direto](#ingestão-do-tesouro-direto) para a lista completa de
+  secrets), sem os quais o compose falha o boot dos serviços `hub` e
+  `plataforma-rabbitmq`.
+
+`Outbox:Relay:AgendamentoAtivo` (`HUB_RELAY_ATIVO` no `.env`) tem default **`true`**
+em produção agora que existe um broker — vira botão de emergência para desligar só o
+relay sem tirar o broker do ar nem reverter o deploy.
+
+**Ao ligar pela primeira vez, o relay drena o backlog acumulado da outbox.** A
+outbox de produção vem sendo escrita desde a fase de ingestão sem que nada a lesse;
+o primeiro ciclo depois deste deploy pode publicar um volume grande de eventos de
+uma vez (dentro do teto de `Outbox:Relay:MaxLotesPorCiclo` por ciclo). Mensagens
+publicadas **antes de existir qualquer fila bindada ao exchange `prices`** são
+descartadas pelo topic exchange — isso é comportamento correto do AMQP, não perda de
+dado: a canônica é o Postgres (ADR-1), a outbox é só o mecanismo de notificação, e
+qualquer consumidor que declare sua fila e os bindings **depois** desse drain
+inicial recomeça a receber eventos dali em diante, sem buraco na canônica que
+poderia reconsultar via `/v1/prices/asof`.
