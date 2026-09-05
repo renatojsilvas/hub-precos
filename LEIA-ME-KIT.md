@@ -11,8 +11,10 @@
 4. Memória: `claude mcp add memoria -- npx -y @modelcontextprotocol/server-memory`
    e semeie com as ADRs 1–12 do plano de arquitetura (cole a seção 10 do
    `plano-hub-custodia.md` e peça para gravar como entidades/relações).
-5. Teste de fumaça: peça "ultracode: crie o esqueleto da solução seguindo o
+5. Primeira fase (F1): peça "ultracode: crie o esqueleto da solução seguindo o
    molde do repo de referência" e observe se o guardiao-padroes roda na entrega.
+   **O F1 não termina quando compila — termina deployado na VPS, mandando métrica
+   para o Grafana.** Ver "O que o F1 tem que alcançar", logo abaixo.
 6. **Leia a seção 10 do PADROES.md ANTES de portar qualquer coisa.** As seções 1–9
    vêm do repo de referência; a 10 é o que ele NÃO tem — cada item nasceu de algo
    que quebrou de verdade ao construir o `hub` (colisão de alias DNS derrubando o
@@ -30,6 +32,78 @@
 
 Manutenção: quando um padrão evoluir no tesouro-direto-api, atualize PADROES.md
 aqui (é 1 arquivo, copiado entre os repos) — o guardião passa a cobrar o novo.
+
+---
+
+# O que o F1 tem que alcançar
+
+**O objetivo da primeira fase não é "esqueleto que compila". É esqueleto que está
+rodando na VPS e cuja métrica aparece no Grafana** — sem um endpoint de negócio
+sequer. Andar antes de correr: o caminho inteiro de entrega funcionando, com nada
+dentro.
+
+O `hub` fez ao contrário — esqueleto local primeiro, deploy muito depois — e pagou
+caro por isso. Quando o deploy finalmente aconteceu, já havia código de verdade em
+cima, e cada problema de infraestrutura chegou junto: colisão de alias DNS derrubando
+o vizinho **em produção**, credencial provisionada sem verificação, segredo com quebra
+de linha invisível, o scrape do alloy que ninguém tinha configurado. Com um esqueleto
+vazio, todos esses seriam de resolução trivial e sem consequência. **Não repita a
+ordem.**
+
+E há um ganho que só existe nessa ordem: quando a primeira funcionalidade real
+aparecer, o painel já está de pé para mostrá-la. Observabilidade montada depois é
+observabilidade que ninguém confere.
+
+## No seu repo
+
+- `Dockerfile` multi-stage e **dois** composes: o local (com o serviço `app`, não só o
+  banco — ver armadilha 2) e o de produção.
+- `.github/workflows/ci.yml` com job de teste **e** job de deploy por SSH. Copie o do
+  molde inteiro; o `hub` esqueceu o CI no porte e só notou muito depois (§10.10).
+- Nome de serviço **único na rede** que você vai usar, conferido contra os aliases já
+  registrados lá — não só único no seu arquivo (§10.1).
+- `health`/`metrics` expostos e `Loki__Uri=http://alloy:3100`. Log é *push*: quem
+  inicia é a sua aplicação, então ela precisa do endereço do destino.
+- **Limites de recurso desde o primeiro deploy.** A VPS é pequena e compartilhada;
+  serviço sem teto é serviço que derruba vizinho. Leia 10.12–10.14 do `PADROES` antes
+  de escolher os números, e saiba quantos núcleos a máquina tem (`nproc`).
+- `.env.example` documentando cada segredo: papel, default e o que quebra sem ele.
+
+## No GitHub
+
+Os secrets do deploy (`VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`) e os do seu serviço.
+Cadastre **antes** do primeiro merge: o deploy foi escrito para falhar cedo e com
+mensagem clara se faltarem — mas falha.
+
+## No repo do `tesouro-direto` (métrica é *pull*, mora lá)
+
+Quem inicia a conexão precisa do endereço do outro — por isso log resolve no seu repo
+e métrica não. São quatro edições, e a terceira é a que todo mundo esquece:
+
+1. alvo do scrape em `infra/alloy/config.alloy`, com `job=<seu-servico>`;
+2. dashboard em `infra/grafana/dashboards/`;
+3. **o nome do dashboard na lista fixa do `apply-cloud.sh`** — copiar o JSON não basta;
+4. regras de alerta como `rules-<seu-repo>.yaml`, **nunca** `rules.yaml`: esse nome já
+   é das 21 regras do TD, e o PUT do publicador as sobrescreveria.
+
+Depois rode o `apply-cloud.sh` com `GC_GRAFANA_URL`, `GC_GRAFANA_TOKEN` e
+`TELEGRAM_BOT_TOKEN` **exportados na invocação** — o script não lê o `.env`, e a guarda
+`${VAR:?}` só testa vazio: um placeholder como `not-configured-local-dev` passa por ela
+e deixa o Telegram mudo, para todos os serviços, com o script reportando sucesso.
+
+## Critério de pronto do F1
+
+Quatro provas, nesta ordem — nenhuma delas é "o CI ficou verde":
+
+1. `curl` no `/health/ready` **pela VPS**, respondendo.
+2. A série do seu `job=` visível no Grafana Cloud.
+3. O dashboard do seu serviço aparecendo lá, com dados.
+4. **Um alerta seu disparando de propósito e chegando no Telegram.** Esta é a única que
+   prova a corrente inteira. No `hub` os alertas ficaram semanas sem existir na nuvem
+   porque os arquivos nunca tinham sido copiados para o outro repo, e o publicador
+   pulava o bloco em silêncio, avisando "ausente — pulando" no meio de uma saída longa.
+
+Só depois disso escreva a primeira migration.
 
 ---
 
@@ -215,6 +289,24 @@ Quase entreguei uma etapa pela metade. A fila de tarefas existia só no contexto
 sessão e nunca tinha sido commitada; eu me guiei pela ordem de implementação do plano
 de arquitetura, que nomeava só um dos dois endpoints da etapa. **Commite o roadmap.**
 A próxima sessão lê o escopo do repo, não reconstrói do contexto.
+
+## Deixar o deploy para depois de existir código
+
+Defini o F1 do `hub` como "esqueleto, sem endpoints de negócio" e parei aí — compilava
+e subia na minha máquina. O deploy veio fases depois.
+
+Resultado: toda a dor de infraestrutura chegou de uma vez, com código de verdade já em
+cima. A colisão de alias DNS **derrubou o vizinho em produção**; o segredo com quebra
+de linha fez a role nascer com uma senha e a aplicação enviar outra; o scrape do alloy
+não existia, então não havia métrica nenhuma para olhar enquanto se depurava. Com um
+esqueleto vazio, cada um desses seria um susto de dez minutos sem consequência.
+
+O custo real não é o tempo: é que problema de deploy e problema de código chegam
+misturados, e você não sabe qual está olhando.
+
+**Regra:** o F1 termina **deployado e observável**, não "compilando". Ver "O que o F1
+tem que alcançar" na primeira seção deste arquivo — o critério de pronto tem quatro
+provas, e a última é um alerta seu chegando no Telegram.
 
 ## Dimensionar recurso sem medir, e chamar o número de "folgado"
 
