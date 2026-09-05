@@ -1,7 +1,11 @@
 # Kit de padrões — como instalar em cada repo novo (hub, operacoes, custodia)
 
-1. Copie para a raiz do repo novo: `CLAUDE.md`, `PADROES.md`, `.claude/agents/`
-   (5 agents: executor, tarefas-leves, advisor, revisor, guardiao-padroes).
+1. Copie para a raiz do repo novo: `CLAUDE.md`, `PADROES.md`, **`LEIA-ME-KIT.md`
+   (este arquivo)** e `.claude/agents/` (5 agents: executor, tarefas-leves, advisor,
+   revisor, guardiao-padroes). Este arquivo vai junto de propósito: o `PADROES.md`
+   carrega a regra, mas é aqui que estão o objetivo do F1, as armadilhas de infra e
+   os erros de quem conduz — sem ele o repo novo herda o "o quê" e perde o "como não
+   repetir".
 2. Clone o repo de referência como irmão: `git clone <tesouro-direto> ../tesouro-direto-api`
    (somente leitura — jamais editar por aqui). O nome do diretório clonado precisa ser
    exatamente `tesouro-direto-api`, conforme declarado em `CLAUDE.md` — essa divergência
@@ -11,6 +15,11 @@
 4. Memória: `claude mcp add memoria -- npx -y @modelcontextprotocol/server-memory`
    e semeie com as ADRs 1–12 do plano de arquitetura (cole a seção 10 do
    `plano-hub-custodia.md` e peça para gravar como entidades/relações).
+   **A memória é por caminho de projeto** — o repo novo nasce com a dele vazia, e nada
+   do `hub` atravessa sozinho. Além das ADRs, semeie as lições de processo pedindo:
+   *"leia o `LEIA-ME-KIT.md` e grave na memória do projeto: o critério de pronto do F1,
+   onde ficam as lições aprendidas, e os limites de recurso da VPS"*. Sem isso, a
+   primeira sessão do repo novo não sabe nada do que custou caro aqui.
 5. Primeira fase (F1): peça "ultracode: crie o esqueleto da solução seguindo o
    molde do repo de referência" e observe se o guardiao-padroes roda na entrega.
    **O F1 não termina quando compila — termina deployado na VPS, mandando métrica
