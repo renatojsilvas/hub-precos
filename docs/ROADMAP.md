@@ -51,12 +51,22 @@ Redigidos no mesmo formato dos anteriores — copie o texto e cole na sessão. S
 ordem da §9 do ARQUITETURA.md, que é deliberada: cada etapa é utilizável sozinha e não
 exige retrabalho na seguinte.
 
-- [ ] **F6** — implemente o relay outbox → RabbitMQ (seção 4.4 do ARQUITETURA.md):
+- [x] **F6** — implemente o relay outbox → RabbitMQ (seção 4.4 do ARQUITETURA.md):
   compose com o broker, exchange `prices`, e o processo que lê `outbox` com
   `publicado_em IS NULL` ordenado por `id`, publica com publisher confirms na
   `routing_key` do registro e marca `publicado_em`. A garantia é at-least-once
   (ADR-3): pode duplicar entre o publish e o update, nunca perder. **Pronto:**
   eventos do dia chegando a uma fila de teste.
+  <br>→ PR #22 (relay), #23 (deploy/CI), #24 (TTL do ETag), #25 (teste instável),
+  #26 (recursos do broker) — e `tesouro-direto#78`, a outra metade da realocação
+  de memória.
+
+Com o F6, fecha o **item 2 da ordem de implementação** (§9 do ARQUITETURA.md), cujo
+critério de pronto é "eventos do dia chegando a uma fila de teste". Verificado
+localmente com fila `teste.relay` bindada em `eod.ready`; em produção o `eod.ready`
+do fechamento ganhou `publicado_em` 4s depois do ciclo. Não há fila bindada em
+produção — a mensagem vai ao exchange e é descartada, que é o comportamento certo
+enquanto não existir consumidor (ADR-1: a canônica no Postgres é o arquivo).
 
 - [ ] **F7** — Operações mínimo (`POST /operacoes` + outbox + `trades.registered`) e,
   na Custódia, fila com handlers de `TradeRegistered` e `PriceObserved`, livro, posição
@@ -76,7 +86,11 @@ exige retrabalho na seguinte.
 verdade, ambas registradas na memória do projeto com motivo e alternativas:
 
 1. O Hub só roda em **uma réplica** enquanto o Quartz usar store em memória —
-   `[DisallowConcurrentExecution]` vale por processo.
+   `[DisallowConcurrentExecution]` vale por processo. O F6 acrescentou um segundo
+   motivo com a mesma cura: o `SELECT` de pendentes da outbox não usa
+   `FOR UPDATE SKIP LOCKED`, então duas instâncias leriam o mesmo lote e
+   publicariam em dobro. Inócuo para o consumidor sob at-least-once (ele deduplica
+   por chave natural), mas infla `hub_relay_eventos_publicados_total`.
 2. A API key é **uma só para todos os consumidores**. Quando Custódia e Operações
    chegarem, as duas usam a mesma chave, sem como auditar quem chamou nem revogar
    uma sem revogar a outra. A tabela de client keys do molde está como ausência
@@ -106,3 +120,26 @@ alternativas rejeitadas. Nenhuma bloqueia o que está feito.
   e o Fluxo 5 não é verificável ponta a ponta. Candidato a item da §13.
 - **Sem índice para o filtro textual de `/v1/instruments`.** `ILIKE '%...%'` sobre ~400
   linhas; revisitar com `pg_trgm` quando a fase 2 abrir o universo.
+
+Levantadas durante o F6:
+
+- **Capacidade do Postgres compartilhado.** `precos` tem 288 MB (867 mil linhas) e o
+  database `hub` chegou a 298 MB, contra 44 MB do `tesouro_direto`, no mesmo container
+  — que precisou subir de 128 MB para 256 MB (`tesouro-direto#78`) depois de disparar
+  alerta de reclaim sustentado. 256 MB cobre o working set, não o dataset. A ADR-12
+  separa bancos por serviço mas **não separa orçamento de memória**: a instância é uma
+  só. A fase 2 (ações e cripto) é onde se decide entre subir de novo ou dar instância
+  própria ao Hub.
+- **O exchange só nasce no primeiro publish.** A conexão é lazy e o handler não chama o
+  publisher com a outbox vazia, então num ambiente novo o exchange `prices` não existe
+  até o Hub publicar algo. O consumidor deve declarar o próprio exchange (declaração
+  AMQP é idempotente com parâmetros idênticos) antes de fila e bindings, em vez de
+  depender da ordem de subida. Documentado no README.
+- **A sonda não distingue "tudo ingerido" de "nada existe".**
+  `ExisteInstrumentoSemPrecoAsync` devolve `false` nos dois casos, e a mensagem de log
+  diz "nenhum instrumento pendente de backfill" mesmo com o universo vazio — descreve
+  um sistema em dia quando ele está zerado. O TTL do ETag (PR #24) removeu o efeito
+  travante, mas o diagnóstico enganoso continua. Custou horas num incidente real.
+- **`outbox.criado_em` sem `DEFAULT now()`** no schema gerado pelo EF, embora a DDL da
+  §4.1 documente esse default. Inócuo pela aplicação (o EF sempre preenche); `INSERT`
+  manual falha por `NOT NULL`.
