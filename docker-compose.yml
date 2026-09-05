@@ -65,6 +65,10 @@ services:
       - "127.0.0.1:15672:15672"
     volumes:
       - rabbitmqdata:/var/lib/rabbitmq
+      # Mesma config do broker de producao (ver docker-compose.prod.yml): sem
+      # este mount, watermark de memoria e intervalo de coleta de estatisticas
+      # so existiriam em producao, e um erro nesse arquivo so apareceria la.
+      - ./infra/rabbitmq/conf.d:/etc/rabbitmq/conf.d:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
       interval: 5s

@@ -76,22 +76,36 @@ services:
   # burst de publisher confirms de um lote de 100 do relay — e latência de
   # confirm vira outbox parada. 512 fica abaixo dos 1024 de `app`/`db` do
   # molde (o Hub e o Postgres compartilhado pesam mais) e igual ao `web`.
-  # `deploy.resources.limits.cpus: "0.60"` é um teto FOLGADO, só para conter
+  # `deploy.resources.limits.cpus: "1.0"` é um teto FOLGADO, só para conter
   # loop desgovernado, na mesma leitura que o molde registra — não é para
-  # racionar.
+  # racionar. Era "0.60" e foi corrigido em 2026-09-05: num host de UM núcleo
+  # (`nproc` = 1) um teto abaixo de 1.0 não contém runaway nenhum — o processo
+  # já não pode passar de um núcleo —, e só corta rajada legítima. Medido: as
+  # rajadas do broker batiam em 59,99%, exatamente no teto, e eram esticadas
+  # pelo corte até disparar o alerta de throttling. Quem protege o vizinho sob
+  # contenção é o `cpu_shares` acima, não este teto. Quando a VPS ganhar mais
+  # núcleos, 1.0 volta a conter de verdade.
   #
-  # `deploy.resources.limits.memory` trava o CONTAINER em 384MiB (cgroup).
+  # `deploy.resources.limits.memory` trava o CONTAINER em 256MiB (cgroup).
   # Isso por si só NÃO basta: o RabbitMQ tem o próprio "high watermark" de
   # memória, que por padrão é RELATIVO (0.4 = 40%) e relativo ao total do
   # HOST, não ao limite do container — ele não enxerga cgroup. Nesta VPS isso
-  # leria 2GB e reservaria ~800MB de watermark DENTRO de um cgroup travado em
-  # 384MiB: o kernel mata o processo por OOM antes do watermark do RabbitMQ
-  # ter chance de aplicar backpressure (que é o mecanismo que deveria evitar
-  # o OOM, não correr atrás dele). Por isso o watermark abaixo é um valor
-  # ABSOLUTO (256MiB, com folga sob os 384MiB para o resto do processo
-  # Erlang/RabbitMQ, que não é só heap de mensagem).
+  # leria 2GB e reservaria ~800MB de watermark DENTRO do cgroup: o kernel mata
+  # o processo por OOM antes do watermark do RabbitMQ ter chance de aplicar
+  # backpressure (que é o mecanismo que deveria evitar o OOM, não correr atrás
+  # dele). Por isso o watermark abaixo é um valor ABSOLUTO (160MiB, com folga
+  # sob os 256MiB para o resto do processo Erlang/RabbitMQ, que não é só heap
+  # de mensagem).
   #
-  # `memswap_limit` = `memory` (384m), igual ao molde faz em `app`/`db`: sem
+  # O teto era 384MiB e caiu para 256MiB em 2026-09-05, numa REALOCAÇÃO de
+  # orçamento, não num corte: medido em produção, este broker usava 88MiB dos
+  # 384MiB (23%) para mover ~1 mensagem por dia, enquanto o Postgres
+  # compartilhado batia em 70% de um teto de 128MiB servindo 342MB de dados —
+  # e disparava alerta de reclaim sustentado. Os 128MiB liberados aqui foram
+  # para o `tesouro-direto-db`, no compose do outro repo. A VPS tem 2GB e a
+  # soma dos tetos não mudou.
+  #
+  # `memswap_limit` = `memory` (256m), igual ao molde faz em `app`/`db`: sem
   # fixar isso, o Docker libera até 2x em swap em silêncio — para um broker
   # isso trocaria OOM visível por latência arrastada, pior diagnóstico.
   #
@@ -106,12 +120,12 @@ services:
     container_name: hub-precos-rabbitmq
     restart: unless-stopped
     cpu_shares: 512
-    memswap_limit: 384m
+    memswap_limit: 256m
     deploy:
       resources:
         limits:
-          cpus: "0.60"
-          memory: 384m
+          cpus: "1.0"
+          memory: 256m
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?RABBITMQ_USER é obrigatório (usuário do broker; guest não é aceito fora de localhost)}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD é obrigatório (senha do broker; guest não é aceito fora de localhost)}
