@@ -137,7 +137,7 @@ public sealed class TdApiClientResilienceTests
     [Fact]
     public async Task GetTitulosAsync_QuandoAttemptTimeoutEstoura_DevolveFalhaSemLancarExcecao()
     {
-        var handler = new DelayHttpMessageHandler(TimeSpan.FromMilliseconds(300));
+        var handler = new DelayHttpMessageHandler(TimeSpan.FromSeconds(30));
 
         var configuration = BuildConfiguration(new Dictionary<string, string?>
         {
