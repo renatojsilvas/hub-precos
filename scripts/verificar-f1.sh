@@ -108,10 +108,17 @@ print(l[0]['uid'] if l else '')" 2>/dev/null)
     [ "${n:-0}" -gt 0 ] 2>/dev/null \
       && verde "serie up{job=\"$NOME\"} presente na nuvem" \
       || vermelho "nenhuma serie com job=\"$NOME\" — o alloy do tesouro-direto nao esta raspando este servico"
-    d=$(gc "/api/search?query=$NOME&type=dash-db" | python3 -c "import sys,json;print(len(json.load(sys.stdin)))" 2>/dev/null)
+    # Busca pelo UID, nao pelo titulo. O /api/search casa SO por titulo, e o titulo
+    # e legivel enquanto o uid e o slug do servico: medido em 2026-09-05, query=operacoes
+    # devolvia 0 com o dashboard publicado (titulo "Operacoes" com cedilha e til), e o
+    # mesmo valia para hub-precos ("Hub de Precos") e tesouro-direto-api ("Tesouro
+    # Direto API") — ou seja, esta checagem era falso negativo para TODOS os servicos da
+    # plataforma, e uma prova que nunca passa nao prova nada. O uid e o dado estavel: e
+    # ele que o apply-cloud.sh publica e que os links do dashboard usam.
+    d=$(gc "/api/dashboards/uid/$NOME" >/dev/null 2>&1 && echo 1 || echo 0)
     [ "${d:-0}" -gt 0 ] 2>/dev/null \
       && verde "dashboard com '$NOME' publicado" \
-      || vermelho "nenhum dashboard '$NOME' na nuvem — copiou o JSON E pos o nome na lista do apply-cloud.sh?"
+      || vermelho "nenhum dashboard com uid='$NOME' na nuvem — copiou o JSON E pos o nome na lista do apply-cloud.sh?"
   fi
 fi
 
