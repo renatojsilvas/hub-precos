@@ -1,7 +1,11 @@
 # Kit de padrões — como instalar em cada repo novo (hub, operacoes, custodia)
 
-1. Copie para a raiz do repo novo: `CLAUDE.md`, `PADROES.md`, `.claude/agents/`
-   (5 agents: executor, tarefas-leves, advisor, revisor, guardiao-padroes).
+1. Copie para a raiz do repo novo: `CLAUDE.md`, `PADROES.md`, **`LEIA-ME-KIT.md`
+   (este arquivo)** e `.claude/agents/` (5 agents: executor, tarefas-leves, advisor,
+   revisor, guardiao-padroes). Este arquivo vai junto de propósito: o `PADROES.md`
+   carrega a regra, mas é aqui que estão o objetivo do F1, as armadilhas de infra e
+   os erros de quem conduz — sem ele o repo novo herda o "o quê" e perde o "como não
+   repetir".
 2. Clone o repo de referência como irmão: `git clone <tesouro-direto> ../tesouro-direto-api`
    (somente leitura — jamais editar por aqui). O nome do diretório clonado precisa ser
    exatamente `tesouro-direto-api`, conforme declarado em `CLAUDE.md` — essa divergência
@@ -11,22 +15,130 @@
 4. Memória: `claude mcp add memoria -- npx -y @modelcontextprotocol/server-memory`
    e semeie com as ADRs 1–12 do plano de arquitetura (cole a seção 10 do
    `plano-hub-custodia.md` e peça para gravar como entidades/relações).
-5. Teste de fumaça: peça "ultracode: crie o esqueleto da solução seguindo o
+   **A memória é por caminho de projeto** — o repo novo nasce com a dele vazia, e nada
+   do `hub` atravessa sozinho. Além das ADRs, semeie as lições de processo pedindo:
+   *"leia o `LEIA-ME-KIT.md` e grave na memória do projeto: o critério de pronto do F1,
+   onde ficam as lições aprendidas, e os limites de recurso da VPS"*. Sem isso, a
+   primeira sessão do repo novo não sabe nada do que custou caro aqui.
+5. Primeira fase (F1): peça "ultracode: crie o esqueleto da solução seguindo o
    molde do repo de referência" e observe se o guardiao-padroes roda na entrega.
+   **O F1 não termina quando compila — termina deployado na VPS, mandando métrica
+   para o Grafana.** Ver "O que o F1 tem que alcançar", logo abaixo.
 6. **Leia a seção 10 do PADROES.md ANTES de portar qualquer coisa.** As seções 1–9
    vêm do repo de referência; a 10 é o que ele NÃO tem — cada item nasceu de algo
    que quebrou de verdade ao construir o `hub` (colisão de alias DNS derrubando o
    vizinho em produção, credencial provisionada sem verificação, arquivo do molde
-   perdido no porte). Ela foi escrita para o próximo repo não repetir.
+   perdido no porte). Ela foi escrita para o próximo repo não repetir. Os itens
+   10.12–10.17 vieram da fase de mensageria e são de outra natureza — não são sobre
+   porte, são sobre **operar numa máquina pequena e compartilhada**: runtime que não
+   enxerga o cgroup, teto de CPU que só corta rajada, serviço novo estourando o
+   orçamento do vizinho, cache sem prazo, e commit mergeado que nunca chegou a
+   produção. Se o seu repo vai dividir VPS com os outros, esses seis são os que vão
+   te pegar.
+7. **Se você vai CONDUZIR os agents, leia também a última seção deste arquivo**
+   ("Erros de orquestração"). Ela é sobre o que o condutor errou — não o executor —
+   e cada item passou por suíte verde antes de alguém notar.
 
 Manutenção: quando um padrão evoluir no tesouro-direto-api, atualize PADROES.md
 aqui (é 1 arquivo, copiado entre os repos) — o guardião passa a cobrar o novo.
 
 ---
 
+# O que o F1 tem que alcançar
+
+**O objetivo da primeira fase não é "esqueleto que compila". É esqueleto que está
+rodando na VPS e cuja métrica aparece no Grafana** — sem um endpoint de negócio
+sequer. Andar antes de correr: o caminho inteiro de entrega funcionando, com nada
+dentro.
+
+O `hub` fez ao contrário — esqueleto local primeiro, deploy muito depois — e pagou
+caro por isso. Quando o deploy finalmente aconteceu, já havia código de verdade em
+cima, e cada problema de infraestrutura chegou junto: colisão de alias DNS derrubando
+o vizinho **em produção**, credencial provisionada sem verificação, segredo com quebra
+de linha invisível, o scrape do alloy que ninguém tinha configurado. Com um esqueleto
+vazio, todos esses seriam de resolução trivial e sem consequência. **Não repita a
+ordem.**
+
+E há um ganho que só existe nessa ordem: quando a primeira funcionalidade real
+aparecer, o painel já está de pé para mostrá-la. Observabilidade montada depois é
+observabilidade que ninguém confere.
+
+## No seu repo
+
+- `Dockerfile` multi-stage e **dois** composes: o local (com o serviço `app`, não só o
+  banco — ver armadilha 2) e o de produção.
+- **O CI/CD inteiro, funcionando** — não é item de fase futura. Dois jobs: `test`
+  (restore, build, testes, **gate de cobertura**, Sonar, e o `docker compose config -q`
+  dos dois composes) e `deploy` (SSH, condicionado a `push` na `main` e ao `test`
+  passar). Copie o do molde inteiro; o `hub` esqueceu o CI no porte e só notou muito
+  depois (§10.10).
+- No job de deploy, o que o `hub` aprendeu apanhando e que você deve levar de saída:
+  preflight que aborta se a rede ou o container vizinho não existem; normalização dos
+  segredos com `tr -d '\r\n'` **na origem** (§10.4); o `.env` escrito com **todas** as
+  variáveis obrigatórias no mesmo `printf`, porque ele é reescrito por completo e
+  esquecer uma derruba o serviço no `up` seguinte; guarda de colisão de alias por rede
+  (§10.1); verificação da credencial **pela rede**, nunca por loopback (§10.2, §10.3);
+  e smoke tests no fim que provem o que o healthcheck não prova.
+- Nome de serviço **único na rede** que você vai usar, conferido contra os aliases já
+  registrados lá — não só único no seu arquivo (§10.1).
+- `health`/`metrics` expostos e `Loki__Uri=http://alloy:3100`. Log é *push*: quem
+  inicia é a sua aplicação, então ela precisa do endereço do destino.
+- **Limites de recurso desde o primeiro deploy.** A VPS é pequena e compartilhada;
+  serviço sem teto é serviço que derruba vizinho. Leia 10.12–10.14 do `PADROES` antes
+  de escolher os números, e saiba quantos núcleos a máquina tem (`nproc`).
+- `.env.example` documentando cada segredo: papel, default e o que quebra sem ele.
+
+## No GitHub
+
+Os secrets do deploy (`VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`) e os do seu serviço.
+Cadastre **antes** do primeiro merge: o deploy foi escrito para falhar cedo e com
+mensagem clara se faltarem — mas falha.
+
+## No repo do `tesouro-direto` (métrica é *pull*, mora lá)
+
+Quem inicia a conexão precisa do endereço do outro — por isso log resolve no seu repo
+e métrica não. São quatro edições, e a terceira é a que todo mundo esquece:
+
+1. alvo do scrape em `infra/alloy/config.alloy`, com `job=<seu-servico>`;
+2. dashboard em `infra/grafana/dashboards/`;
+3. **o nome do dashboard na lista fixa do `apply-cloud.sh`** — copiar o JSON não basta;
+4. regras de alerta como `rules-<seu-repo>.yaml`, **nunca** `rules.yaml`: esse nome já
+   é das 21 regras do TD, e o PUT do publicador as sobrescreveria.
+
+Depois rode o `apply-cloud.sh` com `GC_GRAFANA_URL`, `GC_GRAFANA_TOKEN` e
+`TELEGRAM_BOT_TOKEN` **exportados na invocação** — o script não lê o `.env`, e a guarda
+`${VAR:?}` só testa vazio: um placeholder como `not-configured-local-dev` passa por ela
+e deixa o Telegram mudo, para todos os serviços, com o script reportando sucesso.
+
+## Critério de pronto do F1
+
+Cinco provas. A primeira é sobre o **mecanismo**; as outras quatro, sobre o
+**resultado** — e nenhuma delas é "o CI ficou verde":
+
+1. **Um merge na `main` deploya sozinho.** Deploy feito à mão não conta: o pipeline é
+   entregável do F1, não atalho para ele. Se você subiu por SSH na unha para "ver
+   funcionando", o F1 não fechou — só adiou a descoberta dos problemas de pipeline para
+   quando já houver código em cima.
+2. `curl` no `/health/ready` **pela VPS**, respondendo.
+3. A série do seu `job=` visível no Grafana Cloud.
+4. O dashboard do seu serviço aparecendo lá, com dados.
+5. **Um alerta seu disparando de propósito e chegando no Telegram.** Esta é a única que
+   prova a corrente inteira. No `hub` os alertas ficaram semanas sem existir na nuvem
+   porque os arquivos nunca tinham sido copiados para o outro repo, e o publicador
+   pulava o bloco em silêncio, avisando "ausente — pulando" no meio de uma saída longa.
+
+E um cuidado que o `hub` só aprendeu tarde: **verde no CI não é deployado**. Se o job de
+deploy depende do de teste, um teste instável pula o deploy sem alarde nenhum. No `hub`
+um PR ficou **12 dias** mergeado e fora do ar por isso. Depois de todo merge, confira o
+run de `push`, não só o do PR (§10.17).
+
+Só depois disso escreva a primeira migration.
+
+---
+
 # Armadilhas que custaram tempo no `hub` — leia antes de subir qualquer coisa
 
-Sete coisas que quebraram de verdade ao levar o primeiro repo deste kit até a VPS.
+Oito coisas que quebraram de verdade ao levar o primeiro repo deste kit até a VPS.
 Nenhuma está no repo de referência: ou ele nunca enfrentou o caso, ou tem o mesmo
 defeito e ninguém tinha esbarrado ainda. A pior derrubou um serviço em produção.
 
@@ -79,6 +191,15 @@ loopback, qualquer senha autentica — a verificação passaria sempre e seria t
 Verificação de credencial tem que sair por um container cliente na mesma rede docker. E
 verifique: provisionar sem testar a credencial que você acabou de criar é afirmar sem
 evidência, e o defeito reaparece minutos depois, longe da causa.
+
+**8. A ferramenta de teste é ponto único de falha do CI inteiro.**
+O Testcontainers puxa o **Ryuk** do Docker Hub uma vez por execução, para faxinar
+containers órfãos ao final. Num runner efêmero ele não tem função — a VM é destruída
+junto com o job — mas tem custo: quando o Docker Hub devolveu HTTP 500 servindo o
+manifesto dele, **163 dos 208 testes quebraram juntos em 9,8s**, inclusive os que nada
+tinham a ver com a mudança. Desligue com `TESTCONTAINERS_RYUK_DISABLED=true` no CI. E
+saiba reconhecer o padrão: suíte inteira falhando de uma vez, rápido demais para ter
+executado, é infraestrutura comum — não é o seu código.
 
 ---
 
@@ -198,6 +319,125 @@ sessão e nunca tinha sido commitada; eu me guiei pela ordem de implementação 
 de arquitetura, que nomeava só um dos dois endpoints da etapa. **Commite o roadmap.**
 A próxima sessão lê o escopo do repo, não reconstrói do contexto.
 
+## Deixar o deploy para depois de existir código
+
+Defini o F1 do `hub` como "esqueleto, sem endpoints de negócio" e parei aí — compilava
+e subia na minha máquina. O deploy veio fases depois.
+
+Resultado: toda a dor de infraestrutura chegou de uma vez, com código de verdade já em
+cima. A colisão de alias DNS **derrubou o vizinho em produção**; o segredo com quebra
+de linha fez a role nascer com uma senha e a aplicação enviar outra; o scrape do alloy
+não existia, então não havia métrica nenhuma para olhar enquanto se depurava. Com um
+esqueleto vazio, cada um desses seria um susto de dez minutos sem consequência.
+
+O custo real não é o tempo: é que problema de deploy e problema de código chegam
+misturados, e você não sabe qual está olhando.
+
+**Regra:** o F1 termina **deployado e observável**, não "compilando". Ver "O que o F1
+tem que alcançar" na primeira seção deste arquivo — o critério de pronto tem quatro
+provas, e a última é um alerta seu chegando no Telegram.
+
+## Dimensionar recurso sem medir, e chamar o número de "folgado"
+
+O advisor recomendou **peso** de CPU (`cpu_shares`), com o argumento de que CPU não se
+estoca. Eu mantive o peso e acrescentei um teto rígido de `0.60`, escrevendo no
+comentário que era "folgado, só para conter loop desgovernado". O número não veio de
+lugar nenhum — nem de medição, nem do molde, nem do advisor.
+
+Duas semanas depois, alerta de throttling. As rajadas do broker batiam em **59,99%**:
+cortadas exatamente no teto que eu inventei. E o teto não protegia nada, porque a VPS
+tem **um núcleo** — o processo já não podia passar de 1.0.
+
+**Regra:** número de limite ou é medido, ou vem do molde, ou é decisão registrada com o
+motivo. "Parece folgado" não é nenhuma das três. E antes de dimensionar qualquer coisa,
+saiba quantos núcleos a máquina tem — `nproc` muda o significado de todo teto de CPU.
+
+## Remover uma garantia implícita sem procurar quem dependia dela
+
+Troquei `depends_on: service_healthy` por `service_started` no broker, por um motivo
+correto: um broker doente não pode impedir a API de **leitura** de subir. A mudança
+estava certa. O que eu não fiz foi perguntar **quem estava se apoiando naquela espera**.
+
+Estava: a verificação de credencial do deploy rodava logo depois do `up -d` e só
+funcionava porque o `service_healthy` segurava o retorno. Sem ele, o `curl` bateu numa
+porta fechada 6 segundos depois e o deploy reprovou dizendo "credencial diverge" —
+diagnóstico errado, para um problema de tempo.
+
+**Regra:** ao remover uma espera, um lock, um `depends_on` ou qualquer ordenação, faça
+`grep` por quem vem depois no mesmo fluxo. Garantia implícita não aparece em teste
+unitário e não deixa rastro no diff.
+
+## Reintroduzir, por outra porta, o acoplamento que você acabou de evitar
+
+Discuti com cuidado por que o relay **não** entra no `/health/ready`: o readiness
+alimenta o healthcheck do container, e broker fora do ar não pode degradar a API de
+leitura, que não depende dele. Provei empiricamente. Escrevi no PR.
+
+E aí pus `depends_on: plataforma-rabbitmq: condition: service_healthy` no mesmo serviço
+— que faz um broker doente impedir o Hub de subir. É o mesmo acoplamento, com outro
+nome, três dezenas de linhas abaixo no mesmo arquivo.
+
+**Regra:** depois de decidir "X não pode depender de Y", procure no arquivo inteiro
+todas as formas de X depender de Y. Health check, `depends_on`, ordem de boot, timeout
+compartilhado, pool compartilhada.
+
+## Especular em vez de medir — e repetir isso três vezes
+
+Na investigação do throttling levantei três hipóteses e escrevi cada uma com confiança:
+pressão de memória do host, busy-wait dos schedulers do Erlang, e o relay abrindo canal
+a cada 5s. **As três estavam erradas**, e cada uma custou uma ida e volta com o dono.
+
+O que resolveu foram três medições: `free -m` (descartou memória), `scheduler_wall_time`
+(0,19% — a VM estava ociosa, matando o busy-wait) e um laço de `docker stats` que
+revelou o **formato** da curva — rajadas paradas exatamente na cota. O formato disse o
+que nenhum raciocínio meu tinha dito: era trabalho cortado, não trabalho excessivo.
+
+**Regra:** em diagnóstico de recurso, a primeira ação é medir, não hipotetizar. E
+quando a primeira hipótese cai, isso é sinal para medir mais, não para hipotetizar de
+novo. Se você já errou duas vezes, pare de propor causa e peça dado.
+
+## Escolher a prova difícil quando existe uma fácil
+
+Pedi a um executor que provasse empiricamente a diferença entre dois healthchecks do
+RabbitMQ — medir com timestamps que um fica verde antes de a porta abrir e o outro não.
+Ele empacou horas num problema de permissão do próprio arranjo de teste.
+
+A prova era desnecessária. O deploy não precisa saber **quando** o healthcheck fica
+verde: ele precisa esperar pela **condição que ele mesmo usa** — a API respondendo. Um
+laço em volta da própria verificação se autovalida e dispensa medir qualquer coisa. Ao
+matar o agente e fazer eu mesmo, o diff saiu em minutos.
+
+**Regra:** antes de mandar alguém provar uma propriedade do sistema, pergunte se dá
+para escrever o código de um jeito que não dependa daquela propriedade. E se um agente
+está há muito tempo no mesmo ponto, olhe o que ele está fazendo — o problema pode não
+ser a tarefa.
+
+## Aceitar diagnóstico de terceiro sem conferir contra o código
+
+Chegou uma análise externa do teste que estava falhando. Ela acertou **qual** teste era
+e errou o resto: propunha aceitar também um código de erro `TdApi.Timeout` que **não
+existe no projeto** (`AdapterErrors` tem quatro, e esse não é um deles), sem citar o
+valor real da falha — sinal de que não tinha lido o detalhe.
+
+Aplicada, teria trocado um teste vermelho por um teste **cego**: ele passaria justamente
+no cenário que existe para reprovar, o do timeout não funcionar.
+
+**Regra:** diagnóstico de fora se confere contra o código antes de virar correção.
+Comece pelo mais barato: os identificadores citados existem no repo?
+
+## Registrar em todo lugar, menos no arquivo certo
+
+Gravei as lições desta etapa em mensagem de commit, corpo de PR e no grafo da memória.
+Nenhum desses lugares é lido por quem for criar o `custodia`. O `PADROES.md` §10 e esta
+seção — os dois arquivos que existem exatamente para isso — ficaram intactos até o dono
+perguntar onde estavam as lições.
+
+É a §10.10 do `PADROES` (comparar por ausência) acontecendo com quem escreveu a §10.10.
+
+**Regra:** ao fechar uma etapa, o checklist não é "eu registrei?" e sim "está no arquivo
+que a próxima pessoa vai abrir?". Commit e PR são registro de **quando**; `PADROES.md` e
+este arquivo são registro de **o que não repetir**.
+
 ## Dois vícios de relato
 
 - **Atribuir ao dono uma decisão que foi inferência sua.** Escrevi "escolha sua" sobre
@@ -205,3 +445,8 @@ A próxima sessão lê o escopo do repo, não reconstrói do contexto.
 - **Somar errado e afirmar com confiança.** Reportei uma contagem de testes 10 acima da
   real, com a saída do comando colada logo acima. Confira o número que você acabou de
   escrever contra a saída que você acabou de colar.
+- **Ler evidência com viés de confirmação.** Querendo confirmar que um container tinha
+  reiniciado, afirmei que "o `MachineName` do log mudou, logo reiniciou". Eu não tinha
+  valor anterior para comparar — e `docker restart` preserva o container, então esse
+  campo nem mudaria. Inventei uma prova para a conclusão que eu já queria. Antes de
+  chamar algo de evidência, pergunte o que ela valeria se a sua hipótese fosse falsa.

@@ -82,19 +82,31 @@ enquanto não existir consumidor (ADR-1: a canônica no Postgres é o arquivo).
   sutil e tudo acima funciona sem ele. Comece o enum com o que as carteiras reais têm
   (compra, venda, cupom, resgate), não com a taxonomia completa da B3 no dia 1.
 
-**Antes do F7, resolva duas dívidas** que só mordem quando existir consumidor de
-verdade, ambas registradas na memória do projeto com motivo e alternativas:
+**Duas dívidas adiadas por decisão do dono (2026-09-05)**, ambas registradas na
+memória do projeto com motivo e alternativas. Elas só mordem quando existir consumidor
+de verdade, e a decisão foi que **não mordem nesta topologia** — mas cada uma tem
+gatilho de revisita explícito, porque desvio sem gatilho vira dogma:
 
-1. O Hub só roda em **uma réplica** enquanto o Quartz usar store em memória —
-   `[DisallowConcurrentExecution]` vale por processo. O F6 acrescentou um segundo
-   motivo com a mesma cura: o `SELECT` de pendentes da outbox não usa
-   `FOR UPDATE SKIP LOCKED`, então duas instâncias leriam o mesmo lote e
-   publicariam em dobro. Inócuo para o consumidor sob at-least-once (ele deduplica
-   por chave natural), mas infla `hub_relay_eventos_publicados_total`.
-2. A API key é **uma só para todos os consumidores**. Quando Custódia e Operações
-   chegarem, as duas usam a mesma chave, sem como auditar quem chamou nem revogar
-   uma sem revogar a outra. A tabela de client keys do molde está como ausência
-   decidida — introduzi-la **depois** que houver integrador é breaking change.
+1. **Réplica única.** O Hub só roda em uma réplica enquanto o Quartz usar store em
+   memória — `[DisallowConcurrentExecution]` vale por processo. O F6 acrescentou um
+   segundo motivo com a mesma cura: o `SELECT` de pendentes da outbox não usa
+   `FOR UPDATE SKIP LOCKED`, então duas instâncias leriam o mesmo lote e publicariam em
+   dobro (inócuo para o consumidor sob at-least-once, que deduplica por chave natural,
+   mas infla `hub_relay_eventos_publicados_total`).
+   **Decisão:** não haverá duas réplicas do Hub. **Gatilho de revisita:** no dia em que
+   alguém escalar horizontalmente, os DOIS pontos têm que ser resolvidos juntos — store
+   persistente com clustering no Quartz **e** `FOR UPDATE SKIP LOCKED` na leitura da
+   outbox. Escalar resolvendo só um deles publica evento em dobro em silêncio.
+
+2. **API key única para todos os consumidores.** Custódia e Operações usarão a mesma
+   chave, sem como auditar quem chamou nem revogar uma sem revogar a outra.
+   **Decisão:** o acesso é de dentro da mesma VPS, pela rede docker interna — o Hub não
+   fica exposto, e a chave única não amplia superfície. **Gatilho de revisita:** se
+   algum consumidor passar a chamar de fora da rede docker, ou se for preciso saber
+   **qual** serviço fez uma chamada (investigação de incidente, rate limit por
+   consumidor, revogação seletiva). Note que introduzir a tabela de client keys
+   **depois** que houver integrador é breaking change — o custo cresce com o tempo,
+   então a revisita não deve esperar o problema doer.
 
 ---
 

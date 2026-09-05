@@ -253,3 +253,101 @@ log é sinal de roteamento errado. Investigue antes de explicar como teste manua
 lidas como ruído. Eram o front do `tesouro-direto` caindo aqui por causa da colisão de
 alias (10.1) — a prova do incidente estava disponível antes de alguém notar o
 incidente.
+
+### 10.12. Runtime dentro de container não enxerga o limite do cgroup
+
+Todo runtime que dimensiona algo "em função da memória disponível" — heap, cache,
+watermark, número de threads — lê o **host**, não o seu `deploy.resources.limits`.
+Fixe o valor em absoluto, sempre.
+
+**Por quê:** o `vm_memory_high_watermark` do RabbitMQ é relativo por padrão (0,4).
+Numa VPS de 2GB isso reserva ~800MB **dentro** de um cgroup de 384MB: o kernel mata o
+processo por OOM antes de o watermark ter chance de aplicar backpressure — ou seja, o
+mecanismo que existe para evitar o OOM nunca chega a agir. O mesmo vale para o GC do
+.NET, que sem limite de cgroup vê os 2GB do host e deixa o heap crescer bem além do
+que cresceria vendo 256MB. Corolário desagradável: a env var clássica
+`RABBITMQ_VM_MEMORY_HIGH_WATERMARK` está **deprecated** na imagem `rabbitmq:4` e o
+entrypoint **recusa subir** com ela setada — o valor absoluto tem que entrar por
+arquivo de config.
+
+**Guarda:** depois de subir, confira o valor efetivo lá dentro (`rabbitmqctl status`,
+`GC.GetGCMemoryInfo`, o que o runtime expuser). Se ele bate com o host e não com o
+container, está errado.
+
+### 10.13. Em host de um núcleo, teto de CPU não contém nada — só corta rajada
+
+Use **peso** (`cpu_shares`) para proteger vizinho sob contenção. Um teto rígido
+(`cpus`) abaixo de 1.0 num host de 1 vCPU não impede runaway nenhum, porque o processo
+já não pode passar de um núcleo; ele só transforma trabalho curto em trabalho throttled.
+
+**Por quê:** o broker recebeu `cpus: "0.60"` descrito como "folgado, só para conter
+loop desgovernado". Não era folgado: a coleta de estatísticas do plugin de management
+(a cada 5s por padrão) precisa de ~0,6s de CPU, e o corte a 60ms por período de 100ms
+a esticava por ~10 períodos. Resultado: ~20% dos períodos throttled, exatamente o
+limiar do alerta, com o broker **99,8% ocioso** no resto do tempo.
+
+**Como reconhecer:** throttling com CPU média baixa é normal e enganoso — o CFS não
+limita média, limita fatia por período. Num laço de `docker stats`, rajada que para
+**exatamente** no valor da cota é trabalho cortado, não trabalho excessivo.
+
+### 10.14. Serviço novo muda o orçamento dos VIZINHOS, não só o seu
+
+Ao acrescentar serviço ou volume de dados numa máquina pequena, revise os tetos de
+quem já estava lá. O limite deles foi dimensionado para um mundo que você acabou de
+mudar.
+
+**Por quê:** o Postgres compartilhado tinha 128MB, dimensionados quando servia só o
+`tesouro_direto` (44MB). O Hub passou a escrever no mesmo cluster e o database `hub`
+chegou a 298MB — 288MB só da tabela `precos`. Servir ~342MB dentro de um cgroup de
+128MB faz o kernel reciclar página continuamente, e o alerta de reclaim sustentado
+começou a disparar num container que ninguém tinha tocado. A ADR-12 separa **bancos**
+por serviço; ela não separa **orçamento de memória**, porque a instância é uma só.
+
+### 10.15. `up -d` retorna quando o container arranca, não quando fica pronto
+
+Qualquer passo de deploy que fale com um serviço recém-subido precisa esperar pela
+**condição real** que ele usa — não pelo healthcheck, e nunca por nada.
+
+**Por quê:** a verificação de credencial do broker rodava logo após o `up -d` e falhou
+com `curl: (7) failed to connect` 6 segundos depois do "Started", reportando
+credencial divergente quando o problema era só tempo. A espera implícita existia antes
+por acidente (`depends_on: service_healthy`) e sumiu quando essa condição foi trocada
+por `service_started` — por um bom motivo, mas sem que ninguém procurasse quem
+dependia dela. Esperar pelo healthcheck também não resolveria:
+`rabbitmq-diagnostics check_running` fica verde **antes** de a porta de management
+aceitar conexão, então ele é um proxy da condição, não a condição.
+
+**Guarda:** o laço espera pela própria verificação que você vai fazer, e distingue
+"não conectou" (repete) de "conectou e recusou" (falha rápido) — são diagnósticos
+diferentes, e tratá-los igual manda o operador para o lado errado.
+
+### 10.16. Cache sem prazo é uma afirmação que nunca é confrontada
+
+Toda entrada de cache que descreve estado externo precisa de prazo de validade. Sem
+ele, o cache afirma para sempre algo que ele não observa.
+
+**Por quê:** o ETag da TD API ficava num dicionário em memória, sem expiração.
+Enquanto o banco só crescia, a afirmação era verdadeira por acidente. No instante em
+que o banco foi zerado por fora, ela virou mentira permanente: a sonda mandava
+`If-None-Match`, a TD API respondia 304 corretamente ("você já tem esse corpo" — e o
+Hub não tinha), e o ciclo encerrava sem ingerir nada, indefinidamente, até alguém
+reiniciar o container. É o antipadrão do §9 — estado de controle divergindo dos dados.
+
+**Cuidado com o remédio errado:** persistir o ETag junto dos dados parece "derivar dos
+dados" e é pior. A volatilidade foi justamente o que permitiu curar o incidente com um
+restart; persistindo, o incidente vira permanente, e continua quebrando em truncate
+parcial, restore de dump antigo e delete de uma tabela só.
+
+### 10.17. Commit mergeado não é commit em produção
+
+Se o job de deploy depende do job de teste, um teste instável **pula o deploy em
+silêncio**. O painel do repositório fica verde-ish, a `main` tem o código, e produção
+não tem.
+
+**Por quê:** um PR ficou 12 dias mergeado e fora de produção. O teste falhou por
+instabilidade de infraestrutura, o deploy foi pulado, e ninguém notou — porque nada
+distingue "nunca deployado" de "deployado" na leitura casual do histórico.
+
+**Guarda:** o pipeline deve avisar quando a `main` tem commit sem deploy
+correspondente. Enquanto isso não existir, confira o último run de `push` depois de
+todo merge, não só o do PR.
