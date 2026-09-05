@@ -67,7 +67,6 @@ for f in .github/workflows/ci.yml \
          infra/postgres/sql/hub-role.sql \
          infra/postgres/initdb/01-provision-hub.sh \
          infra/postgres/README.md \
-         docker-compose.yml docker-compose.prod.yml \
          Dockerfile .dockerignore .gitignore \
          Directory.Build.props sonar-project.properties \
          .env.example \
@@ -107,6 +106,128 @@ find "$DESTINO" -type f \( -name '*.md' -o -name '*.yml' -o -name '*.yaml' -o -n
 done
 echo "  hub-precos -> $NOME | HUB_ -> ${ENVPREFIXO}_ | Hub. -> $PREFIXO. | hub -> $NOME"
 
+# --- composes PROPRIOS do servico ------------------------------------------------
+# Nao sao copia dos do hub. Os dele carregam decisoes que nao sao deste servico — o
+# broker (que a plataforma ja sobe), limites medidos para a carga dele, e comentarios
+# em prosa sobre incidentes que aconteceram la. Copiar aquilo e deixar um bilhete
+# "adapte antes de usar" e entregar armadilha com aviso; aviso nao e guarda.
+echo "== composes do $NOME =="
+cat > "$DESTINO/docker-compose.yml" <<COMPOSE_LOCAL
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Host=db;Port=5432;Database=$NOME;Username=$NOME;Password=\${${ENVPREFIXO}_APP_PASSWORD:?${ENVPREFIXO}_APP_PASSWORD e obrigatorio no .env (senha da role $NOME)}
+      - ApiKey__Key=\${${ENVPREFIXO}_API_KEY:?${ENVPREFIXO}_API_KEY e obrigatorio no .env (chave que o $NOME exige de quem o chama)}
+      # O broker e servico da PLATAFORMA e nao sobe aqui. Para tê-lo localmente:
+      #   docker network create plataforma   (uma vez)
+      #   docker compose -f ../hub-precos/docker-compose.yml up -d plataforma-rabbitmq
+      - RabbitMq__Host=plataforma-rabbitmq
+      - RabbitMq__User=\${RABBITMQ_USER:-guest}
+      - RabbitMq__Password=\${RABBITMQ_PASSWORD:-guest}
+    ports:
+      # Portas do hub: 5080 (app) e 5433 (pg). Estas sao as seguintes livres; se
+      # colidir com outro servico seu, troque aqui e no README.
+      - "127.0.0.1:5081:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - default
+      - plataforma
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: \${PG_ADMIN_PW:-admin123}
+      POSTGRES_DB: $NOME
+      ${ENVPREFIXO}_APP_PASSWORD: \${${ENVPREFIXO}_APP_PASSWORD:?${ENVPREFIXO}_APP_PASSWORD e obrigatorio no .env}
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/initdb:/docker-entrypoint-initdb.d:ro
+      - ./infra/postgres/sql:/opt/$NOME/sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d $NOME"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  pgdata:
+
+networks:
+  # Rede compartilhada da plataforma, onde vive o broker. External de proposito: ela
+  # NAO e deste servico — se este compose a criasse, um "docker compose down" daqui a
+  # removeria por baixo dos outros. Crie uma vez com: docker network create plataforma
+  plataforma:
+    external: true
+COMPOSE_LOCAL
+
+cat > "$DESTINO/docker-compose.prod.yml" <<COMPOSE_PROD
+services:
+  $NOME:
+    build: .
+    container_name: $NOME-app
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Host=\${${ENVPREFIXO}_DB_HOST:-tesouro-direto-db};Port=5432;Database=\${${ENVPREFIXO}_DB_NAME:-$NOME};Username=$NOME;Password=\${${ENVPREFIXO}_APP_PASSWORD:?${ENVPREFIXO}_APP_PASSWORD e obrigatorio (senha da role $NOME no Postgres compartilhado)}
+      - ApiKey__Key=\${${ENVPREFIXO}_API_KEY:?${ENVPREFIXO}_API_KEY e obrigatorio (chave que o $NOME exige de quem o chama)}
+      - Loki__Uri=\${${ENVPREFIXO}_LOKI_URI:-http://alloy:3100}
+      - RabbitMq__Host=plataforma-rabbitmq
+      - RabbitMq__User=\${RABBITMQ_USER:?RABBITMQ_USER e obrigatorio (usuario do broker; guest nao autentica fora de localhost)}
+      - RabbitMq__Password=\${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD e obrigatorio (senha do broker)}
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+
+    # LIMITES: ponto de partida, nao numero medido. A VPS tem 2GB e UM nucleo,
+    # dividida com o tesouro-direto, o hub e o broker — servico novo muda o teto dos
+    # VIZINHOS, nao so o seu (PADROES 10.14). Antes do primeiro deploy: rode
+    # \`free -m\` e \`docker stats\`, veja o que sobra, e ajuste AQUI e nos vizinhos.
+    # cpu_shares e PESO (vale sob contencao); o teto de cpus num host de 1 nucleo nao
+    # contem runaway nenhum, so corta rajada (10.13) — por isso 1.0.
+    cpu_shares: 512
+    memswap_limit: 192m
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 192m
+
+    networks:
+      tesouro-net:
+      plataforma:
+        aliases:
+          - $NOME-app
+
+networks:
+  # Ambas external: nenhuma pertence a este servico. A tesouro-net e criada pelo
+  # compose do tesouro-direto; a plataforma, pelo preflight do deploy.
+  tesouro-net:
+    external: true
+  plataforma:
+    external: true
+COMPOSE_PROD
+echo "  docker-compose.yml e docker-compose.prod.yml gerados (sem broker, sem prosa do hub)"
+
 # DEPOIS das substituicoes, de proposito: este texto CITA o molde pelo nome, e passar
 # por elas o trocaria pelo nome do servico novo — o repo apontaria para si mesmo.
 # O CLAUDE.md do molde se declara molde. No repo novo isso seria mentira: troca-se o
@@ -121,35 +242,6 @@ procura — nao se inventa.}s;
 " "$DESTINO/CLAUDE.md"
 grep -q "MOLDE:INICIO" "$DESTINO/CLAUDE.md" \
   && { echo "ERRO: o bloco MOLDE nao foi substituido no CLAUDE.md do destino" >&2; exit 1; }
-
-# --- banner nos composes: eles sao REFERENCIA, nao drop-in -----------------------
-# Os composes carregam decisoes especificas do hub que um sed nao sabe traduzir: o
-# servico do broker (que este repo NAO deve subir), os limites de recurso escolhidos
-# para a carga do hub, e comentarios em prosa onde "Hub" as vezes e auto-referencia
-# (vira o seu servico) e as vezes e historico (fica como esta). Marcar em vez de
-# adivinhar.
-for c in docker-compose.yml docker-compose.prod.yml; do
-  [ -f "$DESTINO/$c" ] || continue
-  tmp="$DESTINO/.$c.tmp"
-  cat > "$tmp" <<'BANNER'
-# =============================================================================
-# ADAPTE ANTES DE USAR — copiado do hub-precos, nao e drop-in.
-#
-# 1. REMOVA o servico `plataforma-rabbitmq`. O broker e da PLATAFORMA e ja esta
-#    de pe; este repo so precisa das env vars de cliente (RabbitMq__Host etc.).
-#    Subir um segundo com o mesmo nome e a colisao de alias da secao 10.1.
-# 2. DECIDA os limites de recurso. Os numeros aqui sao da carga do hub, medidos
-#    para ela. A VPS tem 2GB e UM nucleo: servico novo muda o teto dos VIZINHOS
-#    (secao 10.14), entao revise os outros no mesmo movimento.
-# 3. REVISE os comentarios: "Hub" as vezes e auto-referencia (troque pelo nome
-#    deste servico) e as vezes e historico (mantenha — o incidente foi la).
-# 4. Apague este banner quando terminar.
-# =============================================================================
-BANNER
-  cat "$DESTINO/$c" >> "$tmp"
-  mv "$tmp" "$DESTINO/$c"
-done
-echo "  banner de adaptacao adicionado aos dois composes"
 
 # --- C. o que NAO vem, e por que -------------------------------------------------
 cat > "$DESTINO/COMECE-AQUI.md" <<MARCADOR
@@ -239,19 +331,15 @@ for f in PADROES.md LEIA-ME-KIT.md; do
 done
 
 # resquicio de 'hub' fora dos arquivos do kit e do COMECE-AQUI (que cita o hub de proposito)
-resto=$(grep -rilE "hub[-_]?precos|\bHub\." "$DESTINO" \
+# 'hub-precos' aparecendo e LEGITIMO desde que o hub virou molde: e o ponteiro para
+# ele. O que seria erro e sobrar o prefixo de projeto .NET ou um nome de container do
+# hub — isso sim significa substituicao incompleta.
+resto=$(grep -rilE "\bHub\.[A-Z]|hub-precos-(app|rabbitmq)" "$DESTINO" \
         --exclude=PADROES.md --exclude=LEIA-ME-KIT.md --exclude=COMECE-AQUI.md 2>/dev/null || true)
 if [ -n "$resto" ]; then
-  echo "  AVISO: ainda ha referencia ao hub nestes arquivos (confira a mao):"
+  echo "  ERRO: substituicao incompleta — sobrou nome do hub nestes arquivos:"
   echo "$resto" | sed 's|^|    |'
-fi
-
-# o broker nao pode ir para producao neste repo — avisa alto se ainda estiver la
-if grep -qE "^  plataforma-rabbitmq:" "$DESTINO/docker-compose.prod.yml" 2>/dev/null; then
-  echo "  ATENCAO: docker-compose.prod.yml ainda define o servico 'plataforma-rabbitmq'."
-  echo "           O broker e da plataforma e ja esta de pe — REMOVA antes do primeiro"
-  echo "           deploy, ou voce sobe um segundo com o mesmo alias (secao 10.1)."
-  echo "           O banner no topo do arquivo repete isso."
+  falhou=1
 fi
 
 # as guardas da secao 10 tem que ter sobrevivido a copia
