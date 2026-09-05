@@ -17,7 +17,16 @@
    vêm do repo de referência; a 10 é o que ele NÃO tem — cada item nasceu de algo
    que quebrou de verdade ao construir o `hub` (colisão de alias DNS derrubando o
    vizinho em produção, credencial provisionada sem verificação, arquivo do molde
-   perdido no porte). Ela foi escrita para o próximo repo não repetir.
+   perdido no porte). Ela foi escrita para o próximo repo não repetir. Os itens
+   10.12–10.17 vieram da fase de mensageria e são de outra natureza — não são sobre
+   porte, são sobre **operar numa máquina pequena e compartilhada**: runtime que não
+   enxerga o cgroup, teto de CPU que só corta rajada, serviço novo estourando o
+   orçamento do vizinho, cache sem prazo, e commit mergeado que nunca chegou a
+   produção. Se o seu repo vai dividir VPS com os outros, esses seis são os que vão
+   te pegar.
+7. **Se você vai CONDUZIR os agents, leia também a última seção deste arquivo**
+   ("Erros de orquestração"). Ela é sobre o que o condutor errou — não o executor —
+   e cada item passou por suíte verde antes de alguém notar.
 
 Manutenção: quando um padrão evoluir no tesouro-direto-api, atualize PADROES.md
 aqui (é 1 arquivo, copiado entre os repos) — o guardião passa a cobrar o novo.
@@ -26,7 +35,7 @@ aqui (é 1 arquivo, copiado entre os repos) — o guardião passa a cobrar o nov
 
 # Armadilhas que custaram tempo no `hub` — leia antes de subir qualquer coisa
 
-Sete coisas que quebraram de verdade ao levar o primeiro repo deste kit até a VPS.
+Oito coisas que quebraram de verdade ao levar o primeiro repo deste kit até a VPS.
 Nenhuma está no repo de referência: ou ele nunca enfrentou o caso, ou tem o mesmo
 defeito e ninguém tinha esbarrado ainda. A pior derrubou um serviço em produção.
 
@@ -79,6 +88,15 @@ loopback, qualquer senha autentica — a verificação passaria sempre e seria t
 Verificação de credencial tem que sair por um container cliente na mesma rede docker. E
 verifique: provisionar sem testar a credencial que você acabou de criar é afirmar sem
 evidência, e o defeito reaparece minutos depois, longe da causa.
+
+**8. A ferramenta de teste é ponto único de falha do CI inteiro.**
+O Testcontainers puxa o **Ryuk** do Docker Hub uma vez por execução, para faxinar
+containers órfãos ao final. Num runner efêmero ele não tem função — a VM é destruída
+junto com o job — mas tem custo: quando o Docker Hub devolveu HTTP 500 servindo o
+manifesto dele, **163 dos 208 testes quebraram juntos em 9,8s**, inclusive os que nada
+tinham a ver com a mudança. Desligue com `TESTCONTAINERS_RYUK_DISABLED=true` no CI. E
+saiba reconhecer o padrão: suíte inteira falhando de uma vez, rápido demais para ter
+executado, é infraestrutura comum — não é o seu código.
 
 ---
 
@@ -198,6 +216,107 @@ sessão e nunca tinha sido commitada; eu me guiei pela ordem de implementação 
 de arquitetura, que nomeava só um dos dois endpoints da etapa. **Commite o roadmap.**
 A próxima sessão lê o escopo do repo, não reconstrói do contexto.
 
+## Dimensionar recurso sem medir, e chamar o número de "folgado"
+
+O advisor recomendou **peso** de CPU (`cpu_shares`), com o argumento de que CPU não se
+estoca. Eu mantive o peso e acrescentei um teto rígido de `0.60`, escrevendo no
+comentário que era "folgado, só para conter loop desgovernado". O número não veio de
+lugar nenhum — nem de medição, nem do molde, nem do advisor.
+
+Duas semanas depois, alerta de throttling. As rajadas do broker batiam em **59,99%**:
+cortadas exatamente no teto que eu inventei. E o teto não protegia nada, porque a VPS
+tem **um núcleo** — o processo já não podia passar de 1.0.
+
+**Regra:** número de limite ou é medido, ou vem do molde, ou é decisão registrada com o
+motivo. "Parece folgado" não é nenhuma das três. E antes de dimensionar qualquer coisa,
+saiba quantos núcleos a máquina tem — `nproc` muda o significado de todo teto de CPU.
+
+## Remover uma garantia implícita sem procurar quem dependia dela
+
+Troquei `depends_on: service_healthy` por `service_started` no broker, por um motivo
+correto: um broker doente não pode impedir a API de **leitura** de subir. A mudança
+estava certa. O que eu não fiz foi perguntar **quem estava se apoiando naquela espera**.
+
+Estava: a verificação de credencial do deploy rodava logo depois do `up -d` e só
+funcionava porque o `service_healthy` segurava o retorno. Sem ele, o `curl` bateu numa
+porta fechada 6 segundos depois e o deploy reprovou dizendo "credencial diverge" —
+diagnóstico errado, para um problema de tempo.
+
+**Regra:** ao remover uma espera, um lock, um `depends_on` ou qualquer ordenação, faça
+`grep` por quem vem depois no mesmo fluxo. Garantia implícita não aparece em teste
+unitário e não deixa rastro no diff.
+
+## Reintroduzir, por outra porta, o acoplamento que você acabou de evitar
+
+Discuti com cuidado por que o relay **não** entra no `/health/ready`: o readiness
+alimenta o healthcheck do container, e broker fora do ar não pode degradar a API de
+leitura, que não depende dele. Provei empiricamente. Escrevi no PR.
+
+E aí pus `depends_on: plataforma-rabbitmq: condition: service_healthy` no mesmo serviço
+— que faz um broker doente impedir o Hub de subir. É o mesmo acoplamento, com outro
+nome, três dezenas de linhas abaixo no mesmo arquivo.
+
+**Regra:** depois de decidir "X não pode depender de Y", procure no arquivo inteiro
+todas as formas de X depender de Y. Health check, `depends_on`, ordem de boot, timeout
+compartilhado, pool compartilhada.
+
+## Especular em vez de medir — e repetir isso três vezes
+
+Na investigação do throttling levantei três hipóteses e escrevi cada uma com confiança:
+pressão de memória do host, busy-wait dos schedulers do Erlang, e o relay abrindo canal
+a cada 5s. **As três estavam erradas**, e cada uma custou uma ida e volta com o dono.
+
+O que resolveu foram três medições: `free -m` (descartou memória), `scheduler_wall_time`
+(0,19% — a VM estava ociosa, matando o busy-wait) e um laço de `docker stats` que
+revelou o **formato** da curva — rajadas paradas exatamente na cota. O formato disse o
+que nenhum raciocínio meu tinha dito: era trabalho cortado, não trabalho excessivo.
+
+**Regra:** em diagnóstico de recurso, a primeira ação é medir, não hipotetizar. E
+quando a primeira hipótese cai, isso é sinal para medir mais, não para hipotetizar de
+novo. Se você já errou duas vezes, pare de propor causa e peça dado.
+
+## Escolher a prova difícil quando existe uma fácil
+
+Pedi a um executor que provasse empiricamente a diferença entre dois healthchecks do
+RabbitMQ — medir com timestamps que um fica verde antes de a porta abrir e o outro não.
+Ele empacou horas num problema de permissão do próprio arranjo de teste.
+
+A prova era desnecessária. O deploy não precisa saber **quando** o healthcheck fica
+verde: ele precisa esperar pela **condição que ele mesmo usa** — a API respondendo. Um
+laço em volta da própria verificação se autovalida e dispensa medir qualquer coisa. Ao
+matar o agente e fazer eu mesmo, o diff saiu em minutos.
+
+**Regra:** antes de mandar alguém provar uma propriedade do sistema, pergunte se dá
+para escrever o código de um jeito que não dependa daquela propriedade. E se um agente
+está há muito tempo no mesmo ponto, olhe o que ele está fazendo — o problema pode não
+ser a tarefa.
+
+## Aceitar diagnóstico de terceiro sem conferir contra o código
+
+Chegou uma análise externa do teste que estava falhando. Ela acertou **qual** teste era
+e errou o resto: propunha aceitar também um código de erro `TdApi.Timeout` que **não
+existe no projeto** (`AdapterErrors` tem quatro, e esse não é um deles), sem citar o
+valor real da falha — sinal de que não tinha lido o detalhe.
+
+Aplicada, teria trocado um teste vermelho por um teste **cego**: ele passaria justamente
+no cenário que existe para reprovar, o do timeout não funcionar.
+
+**Regra:** diagnóstico de fora se confere contra o código antes de virar correção.
+Comece pelo mais barato: os identificadores citados existem no repo?
+
+## Registrar em todo lugar, menos no arquivo certo
+
+Gravei as lições desta etapa em mensagem de commit, corpo de PR e no grafo da memória.
+Nenhum desses lugares é lido por quem for criar o `custodia`. O `PADROES.md` §10 e esta
+seção — os dois arquivos que existem exatamente para isso — ficaram intactos até o dono
+perguntar onde estavam as lições.
+
+É a §10.10 do `PADROES` (comparar por ausência) acontecendo com quem escreveu a §10.10.
+
+**Regra:** ao fechar uma etapa, o checklist não é "eu registrei?" e sim "está no arquivo
+que a próxima pessoa vai abrir?". Commit e PR são registro de **quando**; `PADROES.md` e
+este arquivo são registro de **o que não repetir**.
+
 ## Dois vícios de relato
 
 - **Atribuir ao dono uma decisão que foi inferência sua.** Escrevi "escolha sua" sobre
@@ -205,3 +324,8 @@ A próxima sessão lê o escopo do repo, não reconstrói do contexto.
 - **Somar errado e afirmar com confiança.** Reportei uma contagem de testes 10 acima da
   real, com a saída do comando colada logo acima. Confira o número que você acabou de
   escrever contra a saída que você acabou de colar.
+- **Ler evidência com viés de confirmação.** Querendo confirmar que um container tinha
+  reiniciado, afirmei que "o `MachineName` do log mudou, logo reiniciou". Eu não tinha
+  valor anterior para comparar — e `docker restart` preserva o container, então esse
+  campo nem mudaria. Inventei uma prova para a conclusão que eu já queria. Antes de
+  chamar algo de evidência, pergunte o que ela valeria se a sua hipótese fosse falsa.
