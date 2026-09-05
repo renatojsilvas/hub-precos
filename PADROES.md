@@ -159,6 +159,25 @@ regras de alerta. Ocupados hoje na `tesouro-net`: `app`, `db`, `web`, `alloy`,
 terceiros na rede e aborta antes do `up`. Cada repo precisa da sua — a do Hub só
 protege o Hub. Ver `.github/workflows/ci.yml`.
 
+**Corolário (2026-09-05, `operacoes`): `aliases:` não resolve a colisão, porque não
+substitui o alias do nome do serviço.** A correção intuitiva ao encontrar um serviço
+`app` — acrescentar `aliases: [nome-prefixado]` ao bloco de rede — não resolve, porque o
+Compose registra o nome do **serviço** como alias sempre; `aliases:` acrescenta, não
+substitui. Medido na VPS: o serviço `app` do `tesouro-direto` (`container_name:
+tesouro-direto-app`) responde na rede `tesouro-net` por **dois** aliases ao mesmo
+tempo — `tesouro-direto-app` e `app`; o mesmo padrão no hub (`hub-precos-app` e `hub`).
+O `docker-compose.yml` local do `operacoes`, gerado por substituição textual do molde,
+tinha o serviço chamado `app` entrando na rede compartilhada `plataforma` — mesmo com
+o comentário do molde nomeando este repo explicitamente ("app fica de fora da
+`plataforma` de propósito… quando custodia/operacoes chegarem, eles entram com nomes
+prefixados pelo domínio"). A correção certa é **renomear o serviço**, não acrescentar
+alias: depois de renomear para `operacoes`, `docker inspect` confirmou
+`operacoes_default: operacoes-operacoes-1 operacoes` e `plataforma:
+operacoes-operacoes-1 operacoes` — nenhum `app`.
+
+**Guarda adicional:** confira o resultado com `docker inspect` dos aliases efetivos,
+nunca pela leitura do YAML — o YAML não distingue "acrescenta" de "substitui".
+
 ### 10.2. Provisionar credencial sem verificá-la é afirmar sem evidência
 
 Todo script que cria ou converge uma credencial tem que **testar** essa credencial
@@ -227,6 +246,16 @@ quando o mecanismo de detecção quebra. Acompanhe-o de uma asserção sobre alg
 TargetFramework, trimming, mudança de SDK —, todos os testes de camada ficam verdes
 sem checar nada, e a regra de PADROES §1 fica desprotegida em silêncio. Mesma lógica
 para teste que itera coleção: guarde contra a coleção vazia.
+
+**Corolário: mutação que contém a palavra que o scanner procura não é mutação.** Ao
+provar por mutação que o teste "Domain e Application não contêm `catch`" não é vácuo, a
+primeira tentativa passou por engano: o comentário escrito junto da mutação continha a
+palavra `catch`, e o regex `\bcatch\b` do próprio teste a capturava — o teste continuou
+verde, mas por um motivo diferente do que o autor pensava. Só ficou vermelho depois de
+reescrever o comentário. **Guarda:** ao mutar para provar não-vacuidade, confira que a
+mutação mudou o sinal que o teste lê, não só o texto ao redor — mutação que não altera
+esse sinal é mutação que não aconteceu, e o verde resultante é falsa confirmação de que
+o teste presta.
 
 ### 10.9. Verifique com o comando literal da documentação
 
@@ -355,3 +384,68 @@ distingue "nunca deployado" de "deployado" na leitura casual do histórico.
 **Guarda:** o pipeline deve avisar quando a `main` tem commit sem deploy
 correspondente. Enquanto isso não existir, confira o último run de `push` depois de
 todo merge, não só o do PR.
+
+### 10.18. `/health/ready` prova conectividade, não prova schema
+
+`AddDbContextCheck<T>` chama `CanConnectAsync()` — ele não confere se as migrations
+foram aplicadas. Trate o resultado do readiness como "o banco responde", não como "o
+schema está certo".
+
+**Por quê:** provado por mutação no `operacoes`: com a aplicação de migrations
+desligada e o schema **completamente vazio** (`__EFMigrationsHistory` dropada, zero
+tabelas), `/health` e `/health/ready` responderam `200 Healthy`. A distinção que muda a
+gravidade: migration que **falha** não passa despercebida — o boot lança exceção não
+tratada antes de escutar a porta (provado: revogar a posse do schema `public` produziu
+`Npgsql.PostgresException 42501: permission denied for schema public`, e o processo
+morreu antes do `app.Run()`), então o container nunca fica `healthy`, o healthcheck do
+Docker nunca vira verde, e o laço `until healthy` do job de deploy falha alto. O risco
+real é mais estreito e mais silencioso: migration **pulada** (feature desligada, chamada
+removida por regressão) ou **drift manual** (tabela dropada por fora com a linha do
+histórico intacta). Nesses dois casos o `/health/ready` mente — responde saudável com o
+dado que ele deveria servir ausente.
+
+No `operacoes` isso era inofensivo enquanto a migration da primeira fase era vazia —
+não havia tabela para faltar. **No `hub` a lacuna já está aberta hoje**: mesmo
+`AddDbContextCheck<AppDbContext>()`, quatro migrations reais, e um `/health/ready` que
+responderia `200 Healthy` com qualquer uma delas ausente por drift. A regra geral: a
+partir do momento em que um serviço tem schema, o readiness precisa confirmar algo além
+de `CanConnectAsync()` para continuar valendo como prova de prontidão.
+
+### 10.19. Testar o header não testa o log
+
+Todo dado que existe em mais de um canal de saída precisa de teste **por canal**. Um
+teste verde num canal não é evidência sobre o outro.
+
+**Por quê:** o CorrelationId trafega por dois caminhos independentes — o header HTTP de
+resposta e o corpo do problem+json saem de `context.Items`; o campo no log estruturado
+sai do `LogContext.PushProperty` do Serilog. Provado por mutação numa revisão
+adversarial: removido o `LogContext.PushProperty` mantendo o header intacto, os 16
+testes de CorrelationId **continuaram passando**. O comportamento estava correto
+(confirmado em log real), mas sem rede de proteção nenhuma — uma regressão futura
+passaria pela CI sem ninguém notar. O `PADROES.md` §7 exige correlation id em toda
+requisição justamente porque é o que torna incidente rastreável; perdê-lo em silêncio no
+log custa caro exatamente quando mais se precisa dele.
+
+**Guarda:** para todo dado que existe em mais de um canal de saída, escreva um teste por
+canal. Não infira o log a partir do header.
+
+### 10.20. Porte herda também as afirmações que só valiam para o molde
+
+Inverso da §10.10: lá o risco é o que faltou copiar; aqui é o que **sobrou** copiado —
+uma asserção que era verdadeira no molde e é falsa nesta fase.
+
+**Por quê:** o gerador de repo novo faz substituição textual, então o CI veio inteiro e
+funcionando — e afirmando funcionalidade que o `operacoes` do F1 não tem: smoke test em
+`GET /v1/instruments` (endpoint do molde, que só nasce no F5 daqui); a cadeia inteira do
+`TD_API_KEY` (este serviço não chama a TD API); consulta de backlog em `SELECT
+COUNT(*) FROM outbox` (tabela que só nasce no F2); verificação de credencial do broker e
+smoke test do relay em `hub_relay_ciclos_total` (F4); e exclusão do container
+`operacoes-rabbitmq` na guarda de colisão — container que o compose deste repo não sobe.
+Rodado assim, o deploy da primeira fase falharia em smoke test de coisa que não existe.
+
+**Guarda:** ao portar, compare por ausência **e** por excesso — para cada asserção
+herdada, pergunte "isto existe nesta fase?". E ao remover, **substitua por uma
+asserção equivalente sobre o que existe** em vez de só apagar: aqui o smoke test de
+`/v1/instruments` virou "sem chave → 401 **e** com a chave → 404", que juntas provam que
+o middleware está ativo e que a chave confere — enquanto só o 401 passaria também com a
+chave errada.
