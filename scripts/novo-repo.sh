@@ -71,7 +71,7 @@ for f in .github/workflows/ci.yml \
          Directory.Build.props sonar-project.properties \
          .env.example \
          scripts/coverage-gate.py \
-         docs/ROADMAP.md; do
+         ; do
   [ -f "$ORIGEM/$f" ] || { echo "  AVISO: '$f' nao existe na origem, pulando"; continue; }
   mkdir -p "$DESTINO/$(dirname "$f")"
   cp "$ORIGEM/$f" "$DESTINO/$f"
@@ -227,6 +227,66 @@ networks:
     external: true
 COMPOSE_PROD
 echo "  docker-compose.yml e docker-compose.prod.yml gerados (sem broker, sem prosa do hub)"
+
+# --- ROADMAP proprio ------------------------------------------------------------
+# NAO copiar o do hub. Ele vem com F1..F5 marcados [x] e traduzidos para o nome do
+# servico novo — quem abrisse o repo leria que esqueleto, schema, adapter e endpoints
+# estao prontos, com zero linha de codigo no lugar. Estado falso e pior que aviso.
+# Aqui so o F1 vem escrito, porque ele e o mesmo para todo repo da plataforma; o resto
+# se deriva da ARQUITETURA, e o texto diz de onde.
+echo "== roadmap do $NOME =="
+mkdir -p "$DESTINO/docs"
+cat > "$DESTINO/docs/ROADMAP.md" <<ROADMAP
+# ROADMAP do $NOME
+
+Fila de tarefas, uma por vez. **Como usar:** abra este arquivo, copie o texto do
+proximo \`F\` nao marcado, cole na sessao, aceite a entrega, marque o checkbox e
+commite. O arquivo e a fonte — nao o que estiver no contexto de alguma sessao.
+
+Arquitetura: \`../plataforma-docs/ARQUITETURA.md\`. Molde: \`../hub-precos\`
+(ver \`PADROES.md\`, \`LEIA-ME-KIT.md\` e \`CLAUDE.md\`).
+
+---
+
+## Fila
+
+- [ ] **F1** — esqueleto da solucao ($PREFIXO.API, $PREFIXO.Application, $PREFIXO.Domain,
+  $PREFIXO.Infrastructure) seguindo o molde: Directory.Build.props, Dockerfile
+  multi-stage, Serilog+CorrelationId, health/metrics, migrations no boot conectando
+  como role \`$NOME\`. **Sem endpoints de negocio.**
+
+  **O F1 nao termina quando compila.** Criterio de pronto em cinco provas — ver
+  \`LEIA-ME-KIT.md\`, secao "O que o F1 tem que alcancar":
+
+  1. um merge na \`main\` deploya sozinho (deploy na unha por SSH nao conta);
+  2. \`curl\` no \`/health/ready\` **pela VPS**;
+  3. a serie do \`job=$NOME\` visivel no Grafana Cloud;
+  4. o dashboard deste servico, com dados;
+  5. um alerta seu disparando de proposito e chegando no Telegram.
+
+  Depois de todo merge, confira o run de \`push\`: **verde no CI nao e deployado**
+  (PADROES 10.17).
+
+---
+
+## Como montar o resto da fila
+
+Nao copie a fila de outro servico. Derive dela:
+
+1. Abra a **secao 9 do ARQUITETURA.md** (ordem de implementacao) e ache o item que
+   corresponde a este servico. Ele diz o escopo e o **criterio de pronto**.
+2. Abra a **secao propria deste servico** no mesmo documento, que detalha contratos,
+   modelo de dados e regras.
+3. Quebre em Fs de UMA entrega cada, na ordem da secao 9 — que e deliberada: cada
+   etapa e utilizavel sozinha e nao exige retrabalho na seguinte.
+4. Escreva o criterio de pronto de cada F **antes** de despachar, e em termos
+   observaveis. "Compila" e "os testes passam" nao sao criterio.
+
+Ao fechar cada F: marque o checkbox, referencie o PR, e leve o que doeu para
+\`PADROES.md\` §10 (regra tecnica) ou \`LEIA-ME-KIT.md\` (armadilha de infra, erro
+de conducao). Commit e PR registram QUANDO; aqueles dois registram O QUE NAO REPETIR.
+ROADMAP
+echo "  docs/ROADMAP.md gerado (so o F1 escrito; o resto se deriva da ARQUITETURA)"
 
 # DEPOIS das substituicoes, de proposito: este texto CITA o molde pelo nome, e passar
 # por elas o trocaria pelo nome do servico novo — o repo apontaria para si mesmo.
