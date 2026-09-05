@@ -58,8 +58,18 @@ observabilidade que ninguém confere.
 
 - `Dockerfile` multi-stage e **dois** composes: o local (com o serviço `app`, não só o
   banco — ver armadilha 2) e o de produção.
-- `.github/workflows/ci.yml` com job de teste **e** job de deploy por SSH. Copie o do
-  molde inteiro; o `hub` esqueceu o CI no porte e só notou muito depois (§10.10).
+- **O CI/CD inteiro, funcionando** — não é item de fase futura. Dois jobs: `test`
+  (restore, build, testes, **gate de cobertura**, Sonar, e o `docker compose config -q`
+  dos dois composes) e `deploy` (SSH, condicionado a `push` na `main` e ao `test`
+  passar). Copie o do molde inteiro; o `hub` esqueceu o CI no porte e só notou muito
+  depois (§10.10).
+- No job de deploy, o que o `hub` aprendeu apanhando e que você deve levar de saída:
+  preflight que aborta se a rede ou o container vizinho não existem; normalização dos
+  segredos com `tr -d '\r\n'` **na origem** (§10.4); o `.env` escrito com **todas** as
+  variáveis obrigatórias no mesmo `printf`, porque ele é reescrito por completo e
+  esquecer uma derruba o serviço no `up` seguinte; guarda de colisão de alias por rede
+  (§10.1); verificação da credencial **pela rede**, nunca por loopback (§10.2, §10.3);
+  e smoke tests no fim que provem o que o healthcheck não prova.
 - Nome de serviço **único na rede** que você vai usar, conferido contra os aliases já
   registrados lá — não só único no seu arquivo (§10.1).
 - `health`/`metrics` expostos e `Loki__Uri=http://alloy:3100`. Log é *push*: quem
@@ -93,15 +103,25 @@ e deixa o Telegram mudo, para todos os serviços, com o script reportando sucess
 
 ## Critério de pronto do F1
 
-Quatro provas, nesta ordem — nenhuma delas é "o CI ficou verde":
+Cinco provas. A primeira é sobre o **mecanismo**; as outras quatro, sobre o
+**resultado** — e nenhuma delas é "o CI ficou verde":
 
-1. `curl` no `/health/ready` **pela VPS**, respondendo.
-2. A série do seu `job=` visível no Grafana Cloud.
-3. O dashboard do seu serviço aparecendo lá, com dados.
-4. **Um alerta seu disparando de propósito e chegando no Telegram.** Esta é a única que
+1. **Um merge na `main` deploya sozinho.** Deploy feito à mão não conta: o pipeline é
+   entregável do F1, não atalho para ele. Se você subiu por SSH na unha para "ver
+   funcionando", o F1 não fechou — só adiou a descoberta dos problemas de pipeline para
+   quando já houver código em cima.
+2. `curl` no `/health/ready` **pela VPS**, respondendo.
+3. A série do seu `job=` visível no Grafana Cloud.
+4. O dashboard do seu serviço aparecendo lá, com dados.
+5. **Um alerta seu disparando de propósito e chegando no Telegram.** Esta é a única que
    prova a corrente inteira. No `hub` os alertas ficaram semanas sem existir na nuvem
    porque os arquivos nunca tinham sido copiados para o outro repo, e o publicador
    pulava o bloco em silêncio, avisando "ausente — pulando" no meio de uma saída longa.
+
+E um cuidado que o `hub` só aprendeu tarde: **verde no CI não é deployado**. Se o job de
+deploy depende do de teste, um teste instável pula o deploy sem alarde nenhum. No `hub`
+um PR ficou **12 dias** mergeado e fora do ar por isso. Depois de todo merge, confira o
+run de `push`, não só o do PR (§10.17).
 
 Só depois disso escreva a primeira migration.
 
