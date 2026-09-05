@@ -10,11 +10,12 @@ com testes, sem expandir escopo.
 
 ## Regra do molde (importante)
 
-Este projeto segue os padrões do repo de referência `../tesouro-direto-api`,
-catalogados em `PADROES.md`. ANTES de criar qualquer estrutura (endpoint,
-repositório, job, client, migration, teste), localize o equivalente no repo
-de referência e use-o como molde: mesma organização, mesmos nomes de padrão,
-mesmo tratamento de erro/headers/idempotência. Se o orquestrador indicou
+Este projeto segue o MOLDE da plataforma, catalogado em `PADROES.md`. O molde é
+o repo `hub-precos` (neste repo, é o próprio código ao redor); `../tesouro-direto-api`
+é referência SECUNDÁRIA, para o que o molde não tem — projeto `*.Web`, testes E2E,
+testes de carga. ANTES de criar qualquer estrutura (endpoint, repositório, job,
+client, migration, teste), localize o equivalente no molde e use-o: mesma
+organização, mesmos nomes de padrão, mesmo tratamento de erro/headers/idempotência. Se o orquestrador indicou
 arquivos-molde no despacho, comece por eles. Não invente estrutura nova
 quando existe molde.
 

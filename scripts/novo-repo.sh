@@ -107,6 +107,21 @@ find "$DESTINO" -type f \( -name '*.md' -o -name '*.yml' -o -name '*.yaml' -o -n
 done
 echo "  hub-precos -> $NOME | HUB_ -> ${ENVPREFIXO}_ | Hub. -> $PREFIXO. | hub -> $NOME"
 
+# DEPOIS das substituicoes, de proposito: este texto CITA o molde pelo nome, e passar
+# por elas o trocaria pelo nome do servico novo — o repo apontaria para si mesmo.
+# O CLAUDE.md do molde se declara molde. No repo novo isso seria mentira: troca-se o
+# bloco entre os marcadores MOLDE:INICIO/FIM pela versao de quem SEGUE o molde.
+perl -0pi -e "
+  s{<!-- MOLDE:INICIO -->.*?<!-- MOLDE:FIM -->}
+   {O molde da plataforma e o repo \`hub-precos\`, clonado como irmao em
+\`../hub-precos\` (somente leitura). O \`tesouro-direto\` e referencia SECUNDARIA,
+em \`../tesouro-direto-api\`, para o que o molde nao tem: projeto \`*.Web\`, testes
+E2E e testes de carga. Quando precisar de um padrao que o hub nao tem, e la que se
+procura — nao se inventa.}s;
+" "$DESTINO/CLAUDE.md"
+grep -q "MOLDE:INICIO" "$DESTINO/CLAUDE.md" \
+  && { echo "ERRO: o bloco MOLDE nao foi substituido no CLAUDE.md do destino" >&2; exit 1; }
+
 # --- banner nos composes: eles sao REFERENCIA, nao drop-in -----------------------
 # Os composes carregam decisoes especificas do hub que um sed nao sabe traduzir: o
 # servico do broker (que este repo NAO deve subir), os limites de recurso escolhidos
