@@ -1,0 +1,420 @@
+#!/usr/bin/env bash
+# Prepara um repo novo da plataforma (operacoes, custodia) a partir deste.
+#
+# POR QUE COPIAR DAQUI, E NAO DO MOLDE: o `tesouro-direto-api` NAO tem as guardas
+# da secao 10 do PADROES — conferido: nem a de colisao de alias DNS, nem a
+# verificacao de credencial pela rede. Elas nasceram de incidentes deste repo.
+# Entao a divisao e:
+#
+#   - CODIGO (4 projetos, Result, MapReadGet, middlewares) -> portar do MOLDE,
+#     seguindo a regra de ouro do CLAUDE.md. Este script NAO gera codigo.
+#   - KIT, INFRA e CI -> copiar DAQUI, que e onde as licoes estao.
+#
+# Uso:
+#   ./scripts/novo-repo.sh operacoes Operacoes [destino]
+#
+#   $1 nome do repo/servico/role/database (minusculo, kebab)
+#   $2 prefixo dos projetos .NET (PascalCase)
+#   $3 destino (default: ../$1)
+set -euo pipefail
+
+NOME="${1:?uso: novo-repo.sh <nome> <PrefixoDotNet> [destino]}"
+PREFIXO="${2:?uso: novo-repo.sh <nome> <PrefixoDotNet> [destino]}"
+ORIGEM="$(cd "$(dirname "$0")/.." && pwd)"
+DESTINO="${3:-$(dirname "$ORIGEM")/$NOME}"
+ENVPREFIXO="$(echo "$NOME" | tr '[:lower:]-' '[:upper:]_')"
+
+echo "== plano =="
+echo "  origem ............ $ORIGEM"
+echo "  destino ........... $DESTINO"
+echo "  servico/role/db ... $NOME"
+echo "  projetos .NET ..... $PREFIXO.API, $PREFIXO.Application, $PREFIXO.Domain, $PREFIXO.Infrastructure"
+echo "  prefixo de env .... ${ENVPREFIXO}_"
+echo
+
+# Destino aceito: inexistente, vazio, ou um repo recem-criado no GitHub e clonado —
+# que e o caso NORMAL (.git mais os arquivos que o GitHub cria sozinho). Qualquer outra
+# coisa la dentro e trabalho de alguem, e este script nao sobrescreve nada.
+if [ -e "$DESTINO" ]; then
+  inesperado=$(ls -A "$DESTINO" 2>/dev/null \
+    | grep -vxE '\.git|README\.md|readme\.md|LICENSE|LICENSE\.md|\.gitignore|\.gitattributes' || true)
+  if [ -n "$inesperado" ]; then
+    echo "ERRO: '$DESTINO' tem conteudo que nao e de repo recem-criado:" >&2
+    echo "$inesperado" | sed 's/^/  /' >&2
+    echo "Este script nao sobrescreve nada. Esvazie o destino ou aponte para outro." >&2
+    exit 1
+  fi
+  echo "  (destino e um repo ja clonado: $(ls -A "$DESTINO" | tr '\n' ' '))"
+  echo
+fi
+
+mkdir -p "$DESTINO"
+
+# --- A. o kit: vai sem alteracao de conteudo -------------------------------------
+# PADROES.md e LEIA-ME-KIT.md sao IDENTICOS entre os repos de proposito: e isso que
+# faz a manutencao ser em um arquivo so. Nao os edite aqui.
+echo "== A. kit =="
+mkdir -p "$DESTINO/.claude"
+cp "$ORIGEM/PADROES.md" "$ORIGEM/LEIA-ME-KIT.md" "$DESTINO/"
+cp -R "$ORIGEM/.claude/agents" "$DESTINO/.claude/"
+cp "$ORIGEM/CLAUDE.md" "$DESTINO/CLAUDE.md"
+echo "  PADROES.md, LEIA-ME-KIT.md, .claude/agents/ (5), CLAUDE.md"
+
+# --- B. infra e CI: copiados DAQUI porque carregam as guardas da secao 10 ---------
+echo "== B. infra e CI (com as guardas da secao 10) =="
+for f in .github/workflows/ci.yml \
+         infra/postgres/provision-remote.sh \
+         infra/postgres/sql/hub-role.sql \
+         infra/postgres/initdb/01-provision-hub.sh \
+         infra/postgres/README.md \
+         Dockerfile .dockerignore .gitignore \
+         Directory.Build.props sonar-project.properties \
+         .env.example \
+         scripts/coverage-gate.py \
+         ; do
+  [ -f "$ORIGEM/$f" ] || { echo "  AVISO: '$f' nao existe na origem, pulando"; continue; }
+  mkdir -p "$DESTINO/$(dirname "$f")"
+  cp "$ORIGEM/$f" "$DESTINO/$f"
+done
+# nomes de arquivo que carregam o nome do servico
+mv "$DESTINO/infra/postgres/sql/hub-role.sql" "$DESTINO/infra/postgres/sql/$NOME-role.sql"
+mv "$DESTINO/infra/postgres/initdb/01-provision-hub.sh" "$DESTINO/infra/postgres/initdb/01-provision-$NOME.sh"
+chmod +x "$DESTINO/infra/postgres/provision-remote.sh" "$DESTINO/infra/postgres/initdb/01-provision-$NOME.sh"
+echo "  ci.yml, provisionamento do Postgres, composes, Dockerfile, gates, ROADMAP"
+
+# --- substituicoes ---------------------------------------------------------------
+# Ordem importa: 'hub-precos' antes de 'hub', senao 'hub-precos' vira '<nome>-precos'.
+# PADROES.md e LEIA-ME-KIT.md sao EXCLUIDOS de proposito: eles tem que sair byte a byte
+# iguais aos daqui (a verificacao la embaixo cobra isso). Substituir dentro deles trocaria
+# os exemplos concretos dos incidentes do hub — que sao justamente o que da forca ao texto —
+# por nomes de um servico onde nada daquilo aconteceu.
+echo "== substituicoes =="
+find "$DESTINO" -type f \( -name '*.md' -o -name '*.yml' -o -name '*.yaml' -o -name '*.sh' \
+     -o -name '*.sql' -o -name '*.json' -o -name '*.props' -o -name '*.properties' \
+     -o -name '*.py' \
+     -o -name 'Dockerfile' -o -name '.env.example' -o -name '.gitignore' -o -name '.dockerignore' \) \
+     ! -name 'PADROES.md' ! -name 'LEIA-ME-KIT.md' \
+     -print0 | while IFS= read -r -d '' f; do
+  perl -pi -e "
+    s/hub-precos/$NOME/g;
+    s/HUB_/${ENVPREFIXO}_/g;
+    s/\bHub\./$PREFIXO./g;
+    s/\bHub\.sln\b/$PREFIXO.sln/g;
+    s/\bhub\b/$NOME/g;
+    s/\bHUB\b/$ENVPREFIXO/g;
+  " "$f"
+done
+echo "  hub-precos -> $NOME | HUB_ -> ${ENVPREFIXO}_ | Hub. -> $PREFIXO. | hub -> $NOME"
+
+# --- composes PROPRIOS do servico ------------------------------------------------
+# Nao sao copia dos do hub. Os dele carregam decisoes que nao sao deste servico — o
+# broker (que a plataforma ja sobe), limites medidos para a carga dele, e comentarios
+# em prosa sobre incidentes que aconteceram la. Copiar aquilo e deixar um bilhete
+# "adapte antes de usar" e entregar armadilha com aviso; aviso nao e guarda.
+echo "== composes do $NOME =="
+cat > "$DESTINO/docker-compose.yml" <<COMPOSE_LOCAL
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Host=db;Port=5432;Database=$NOME;Username=$NOME;Password=\${${ENVPREFIXO}_APP_PASSWORD:?${ENVPREFIXO}_APP_PASSWORD e obrigatorio no .env (senha da role $NOME)}
+      - ApiKey__Key=\${${ENVPREFIXO}_API_KEY:?${ENVPREFIXO}_API_KEY e obrigatorio no .env (chave que o $NOME exige de quem o chama)}
+      # O broker e servico da PLATAFORMA e nao sobe aqui. Para tê-lo localmente:
+      #   docker network create plataforma   (uma vez)
+      #   docker compose -f ../hub-precos/docker-compose.yml up -d plataforma-rabbitmq
+      - RabbitMq__Host=plataforma-rabbitmq
+      - RabbitMq__User=\${RABBITMQ_USER:-guest}
+      - RabbitMq__Password=\${RABBITMQ_PASSWORD:-guest}
+    ports:
+      # Portas do hub: 5080 (app) e 5433 (pg). Estas sao as seguintes livres; se
+      # colidir com outro servico seu, troque aqui e no README.
+      - "127.0.0.1:5081:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - default
+      - plataforma
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: \${PG_ADMIN_PW:-admin123}
+      POSTGRES_DB: $NOME
+      ${ENVPREFIXO}_APP_PASSWORD: \${${ENVPREFIXO}_APP_PASSWORD:?${ENVPREFIXO}_APP_PASSWORD e obrigatorio no .env}
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/initdb:/docker-entrypoint-initdb.d:ro
+      - ./infra/postgres/sql:/opt/$NOME/sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d $NOME"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  pgdata:
+
+networks:
+  # Rede compartilhada da plataforma, onde vive o broker. External de proposito: ela
+  # NAO e deste servico — se este compose a criasse, um "docker compose down" daqui a
+  # removeria por baixo dos outros. Crie uma vez com: docker network create plataforma
+  plataforma:
+    external: true
+COMPOSE_LOCAL
+
+cat > "$DESTINO/docker-compose.prod.yml" <<COMPOSE_PROD
+services:
+  $NOME:
+    build: .
+    container_name: $NOME-app
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Host=\${${ENVPREFIXO}_DB_HOST:-tesouro-direto-db};Port=5432;Database=\${${ENVPREFIXO}_DB_NAME:-$NOME};Username=$NOME;Password=\${${ENVPREFIXO}_APP_PASSWORD:?${ENVPREFIXO}_APP_PASSWORD e obrigatorio (senha da role $NOME no Postgres compartilhado)}
+      - ApiKey__Key=\${${ENVPREFIXO}_API_KEY:?${ENVPREFIXO}_API_KEY e obrigatorio (chave que o $NOME exige de quem o chama)}
+      - Loki__Uri=\${${ENVPREFIXO}_LOKI_URI:-http://alloy:3100}
+      - RabbitMq__Host=plataforma-rabbitmq
+      - RabbitMq__User=\${RABBITMQ_USER:?RABBITMQ_USER e obrigatorio (usuario do broker; guest nao autentica fora de localhost)}
+      - RabbitMq__Password=\${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD e obrigatorio (senha do broker)}
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+
+    # LIMITES: ponto de partida, nao numero medido. A VPS tem 2GB e UM nucleo,
+    # dividida com o tesouro-direto, o hub e o broker — servico novo muda o teto dos
+    # VIZINHOS, nao so o seu (PADROES 10.14). Antes do primeiro deploy: rode
+    # \`free -m\` e \`docker stats\`, veja o que sobra, e ajuste AQUI e nos vizinhos.
+    # cpu_shares e PESO (vale sob contencao); o teto de cpus num host de 1 nucleo nao
+    # contem runaway nenhum, so corta rajada (10.13) — por isso 1.0.
+    cpu_shares: 512
+    memswap_limit: 192m
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 192m
+
+    networks:
+      tesouro-net:
+      plataforma:
+        aliases:
+          - $NOME-app
+
+networks:
+  # Ambas external: nenhuma pertence a este servico. A tesouro-net e criada pelo
+  # compose do tesouro-direto; a plataforma, pelo preflight do deploy.
+  tesouro-net:
+    external: true
+  plataforma:
+    external: true
+COMPOSE_PROD
+echo "  docker-compose.yml e docker-compose.prod.yml gerados (sem broker, sem prosa do hub)"
+
+# --- ROADMAP proprio ------------------------------------------------------------
+# NAO copiar o do hub. Ele vem com F1..F5 marcados [x] e traduzidos para o nome do
+# servico novo — quem abrisse o repo leria que esqueleto, schema, adapter e endpoints
+# estao prontos, com zero linha de codigo no lugar. Estado falso e pior que aviso.
+# Aqui so o F1 vem escrito, porque ele e o mesmo para todo repo da plataforma; o resto
+# se deriva da ARQUITETURA, e o texto diz de onde.
+echo "== roadmap do $NOME =="
+mkdir -p "$DESTINO/docs"
+cat > "$DESTINO/docs/ROADMAP.md" <<ROADMAP
+# ROADMAP do $NOME
+
+Fila de tarefas, uma por vez. **Como usar:** abra este arquivo, copie o texto do
+proximo \`F\` nao marcado, cole na sessao, aceite a entrega, marque o checkbox e
+commite. O arquivo e a fonte — nao o que estiver no contexto de alguma sessao.
+
+Arquitetura: \`../plataforma-docs/ARQUITETURA.md\`. Molde: \`../hub-precos\`
+(ver \`PADROES.md\`, \`LEIA-ME-KIT.md\` e \`CLAUDE.md\`).
+
+---
+
+## Fila
+
+- [ ] **F1** — esqueleto da solucao ($PREFIXO.API, $PREFIXO.Application, $PREFIXO.Domain,
+  $PREFIXO.Infrastructure) seguindo o molde: Directory.Build.props, Dockerfile
+  multi-stage, Serilog+CorrelationId, health/metrics, migrations no boot conectando
+  como role \`$NOME\`. **Sem endpoints de negocio.**
+
+  **O F1 nao termina quando compila.** Criterio de pronto em cinco provas — ver
+  \`LEIA-ME-KIT.md\`, secao "O que o F1 tem que alcancar":
+
+  1. um merge na \`main\` deploya sozinho (deploy na unha por SSH nao conta);
+  2. \`curl\` no \`/health/ready\` **pela VPS**;
+  3. a serie do \`job=$NOME\` visivel no Grafana Cloud;
+  4. o dashboard deste servico, com dados;
+  5. um alerta seu disparando de proposito e chegando no Telegram.
+
+  Depois de todo merge, confira o run de \`push\`: **verde no CI nao e deployado**
+  (PADROES 10.17).
+
+---
+
+## Como montar o resto da fila
+
+Nao copie a fila de outro servico. Derive dela:
+
+1. Abra a **secao 9 do ARQUITETURA.md** (ordem de implementacao) e ache o item que
+   corresponde a este servico. Ele diz o escopo e o **criterio de pronto**.
+2. Abra a **secao propria deste servico** no mesmo documento, que detalha contratos,
+   modelo de dados e regras.
+3. Quebre em Fs de UMA entrega cada, na ordem da secao 9 — que e deliberada: cada
+   etapa e utilizavel sozinha e nao exige retrabalho na seguinte.
+4. Escreva o criterio de pronto de cada F **antes** de despachar, e em termos
+   observaveis. "Compila" e "os testes passam" nao sao criterio.
+
+Ao fechar cada F: marque o checkbox, referencie o PR, e leve o que doeu para
+\`PADROES.md\` §10 (regra tecnica) ou \`LEIA-ME-KIT.md\` (armadilha de infra, erro
+de conducao). Commit e PR registram QUANDO; aqueles dois registram O QUE NAO REPETIR.
+ROADMAP
+echo "  docs/ROADMAP.md gerado (so o F1 escrito; o resto se deriva da ARQUITETURA)"
+
+# DEPOIS das substituicoes, de proposito: este texto CITA o molde pelo nome, e passar
+# por elas o trocaria pelo nome do servico novo — o repo apontaria para si mesmo.
+# O CLAUDE.md do molde se declara molde. No repo novo isso seria mentira: troca-se o
+# bloco entre os marcadores MOLDE:INICIO/FIM pela versao de quem SEGUE o molde.
+perl -0pi -e "
+  s{<!-- MOLDE:INICIO -->.*?<!-- MOLDE:FIM -->}
+   {O molde da plataforma e o repo \`hub-precos\`, clonado como irmao em
+\`../hub-precos\` (somente leitura). O \`tesouro-direto\` e referencia SECUNDARIA,
+em \`../tesouro-direto-api\`, para o que o molde nao tem: projeto \`*.Web\`, testes
+E2E e testes de carga. Quando precisar de um padrao que o hub nao tem, e la que se
+procura — nao se inventa.}s;
+" "$DESTINO/CLAUDE.md"
+grep -q "MOLDE:INICIO" "$DESTINO/CLAUDE.md" \
+  && { echo "ERRO: o bloco MOLDE nao foi substituido no CLAUDE.md do destino" >&2; exit 1; }
+
+# --- C. o que NAO vem, e por que -------------------------------------------------
+cat > "$DESTINO/COMECE-AQUI.md" <<MARCADOR
+# Comece aqui — $NOME
+
+Repo preparado por \`scripts/novo-repo.sh\` do \`hub-precos\` em $(date +%Y-%m-%d).
+O kit, a infra e o CI ja vieram **com as guardas da secao 10 do PADROES**, que o repo
+de referencia nao tem. Falta o que um script nao pode fazer.
+
+## 1. Leia antes de despachar o primeiro executor
+
+- \`PADROES.md\` secao 10 — cada item nasceu de um incidente real.
+- \`LEIA-ME-KIT.md\`, secao **"O que o F1 tem que alcancar"** — o criterio de pronto
+  desta primeira fase. Ele **nao** termina quando compila.
+- \`LEIA-ME-KIT.md\`, secao **"Erros de orquestracao"** — se voce vai conduzir os
+  agents, e ali que voce vai errar.
+
+## 2. Ainda por fazer neste repo
+
+- [ ] \`git init\` e primeiro commit; criar o repo no GitHub.
+- [ ] Clonar o molde como irmao: \`git clone <tesouro-direto> ../tesouro-direto-api\`
+      (o nome do diretorio precisa ser exatamente esse) e \`/add-dir\` na sessao.
+- [ ] **Portar o CODIGO do molde** (nao deste repo): os 4 projetos, \`Result\`/\`Error\`,
+      \`ResultExtensions\`, \`MapReadGet\`, \`ApiKeyMiddleware\`, CorrelationId, Serilog.
+      Regra de ouro do \`CLAUDE.md\`: localize o equivalente no molde e siga.
+- [ ] Copiar \`tests/*.Architecture.Tests/\` do \`hub-precos\` — a versao de la tem o
+      **controle positivo** da secao 10.8, que o molde nao tem.
+- [ ] \`$PREFIXO.sln\` e os csproj.
+- [ ] Reescrever o \`README.md\`.
+- [ ] Revisar \`docs/ROADMAP.md\`: veio como template, com a fila do hub.
+- [ ] Conferir \`.env.example\` e os composes: os nomes foram substituidos, mas os
+      **valores** (portas, limites de recurso) sao do hub e precisam de decisao.
+
+## 3. Fora deste repo
+
+- [ ] Secrets no GitHub: \`VPS_HOST\`, \`VPS_USER\`, \`VPS_SSH_KEY\` e os do servico.
+      Cadastre **antes** do primeiro merge — o deploy falha cedo e com mensagem clara
+      se faltarem, mas falha.
+- [ ] No repo do \`tesouro-direto\`, para metrica (que e *pull* e mora la):
+      alvo do scrape em \`infra/alloy/config.alloy\` com \`job=$NOME\`;
+      dashboard em \`infra/grafana/dashboards/\`;
+      **o nome do dashboard na lista fixa do \`apply-cloud.sh\`** (copiar o JSON nao basta);
+      regras como \`rules-$NOME.yaml\`, **nunca** \`rules.yaml\`.
+- [ ] Rodar o \`apply-cloud.sh\` com \`GC_GRAFANA_URL\`, \`GC_GRAFANA_TOKEN\` e
+      \`TELEGRAM_BOT_TOKEN\` **exportados na invocacao** — o script nao le o \`.env\`, e a
+      guarda \\\`\\\${VAR:?}\\\` so testa vazio: um placeholder passa por ela e cala o Telegram
+      de todos os servicos, com o script reportando sucesso.
+- [ ] **Orcamento de memoria da VPS.** Ela tem 2GB e UM nucleo, ja dividida entre TD,
+      Hub e broker. Servico novo muda o teto dos VIZINHOS, nao so o seu (secao 10.14).
+      Decida o teto deste antes do primeiro deploy, e revise os outros.
+- [ ] Semear a memoria do projeto: ela e **por caminho**, entao este repo nasce com a
+      dele vazia. Peca: *"leia o LEIA-ME-KIT.md e grave na memoria do projeto: o
+      criterio de pronto do F1, onde ficam as licoes aprendidas, e os limites de
+      recurso da VPS"*.
+
+## 4. Criterio de pronto do F1 (cinco provas)
+
+1. **Um merge na \`main\` deploya sozinho** — deploy na unha por SSH nao conta.
+2. \`curl\` no \`/health/ready\` **pela VPS**.
+3. A serie do \`job=$NOME\` visivel no Grafana Cloud.
+4. O dashboard deste servico, com dados.
+5. **Um alerta seu disparando de proposito e chegando no Telegram** — a unica que
+   prova a corrente inteira.
+
+E depois de todo merge, confira o run de \`push\`: **verde no CI nao e deployado**.
+No hub um PR ficou 12 dias fora do ar porque um teste instavel pulou o job de deploy.
+MARCADOR
+
+# --- verificacao: o script confere o proprio resultado ---------------------------
+echo "== verificacao =="
+falhou=0
+
+esperados=("PADROES.md" "LEIA-ME-KIT.md" "CLAUDE.md" "COMECE-AQUI.md"
+           ".github/workflows/ci.yml" "docker-compose.yml" "docker-compose.prod.yml"
+           "Dockerfile" "scripts/coverage-gate.py"
+           "infra/postgres/provision-remote.sh" "infra/postgres/sql/$NOME-role.sql")
+for f in "${esperados[@]}"; do
+  [ -f "$DESTINO/$f" ] || { echo "  FALTA: $f"; falhou=1; }
+done
+
+# PADROES.md e LEIA-ME-KIT.md tem que sair IDENTICOS a origem (sao compartilhados)
+for f in PADROES.md LEIA-ME-KIT.md; do
+  if ! diff -q "$ORIGEM/$f" "$DESTINO/$f" >/dev/null; then
+    echo "  ERRO: '$f' saiu diferente da origem — a substituicao mordeu um arquivo do kit"
+    falhou=1
+  fi
+done
+
+# resquicio de 'hub' fora dos arquivos do kit e do COMECE-AQUI (que cita o hub de proposito)
+# 'hub-precos' aparecendo e LEGITIMO desde que o hub virou molde: e o ponteiro para
+# ele. O que seria erro e sobrar o prefixo de projeto .NET ou um nome de container do
+# hub — isso sim significa substituicao incompleta.
+resto=$(grep -rilE "\bHub\.[A-Z]|hub-precos-(app|rabbitmq)" "$DESTINO" \
+        --exclude=PADROES.md --exclude=LEIA-ME-KIT.md --exclude=COMECE-AQUI.md 2>/dev/null || true)
+if [ -n "$resto" ]; then
+  echo "  ERRO: substituicao incompleta — sobrou nome do hub nestes arquivos:"
+  echo "$resto" | sed 's|^|    |'
+  falhou=1
+fi
+
+# as guardas da secao 10 tem que ter sobrevivido a copia
+for guarda in "colisão de alias" "whoami" "tr -d"; do
+  grep -q "$guarda" "$DESTINO/.github/workflows/ci.yml" \
+    || { echo "  ERRO: guarda '$guarda' sumiu do ci.yml"; falhou=1; }
+done
+
+if [ "$falhou" -ne 0 ]; then
+  echo
+  echo "VERIFICACAO REPROVOU. Confira '$DESTINO' antes de usar." >&2
+  exit 1
+fi
+
+echo "  ok: arquivos presentes, kit intacto, guardas da secao 10 preservadas"
+echo
+echo "== pronto =="
+echo "  Proximo passo: abra $DESTINO/COMECE-AQUI.md"

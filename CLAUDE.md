@@ -5,12 +5,21 @@ e julga. Evite implementar diretamente quando puder delegar.
 
 ## Repo de referência e constituição (LEIA ISTO PRIMEIRO)
 
-Este projeto segue os padrões do repo `tesouro-direto-api`. Três fontes, nesta ordem:
+<!-- MOLDE:INICIO -->
+**Este repo É o molde da plataforma.** Serviços novos (`operacoes`, `custodia`) seguem
+o código, a infra e o CI daqui — ver `scripts/novo-repo.sh`. Ele nasceu seguindo o
+`tesouro-direto`, que continua sendo **referência secundária** para o que aqui não
+existe: projeto `*.Web`, testes E2E e testes de carga. Quando precisar de um padrão que
+o hub não tem, é lá que se procura — não se inventa.
+<!-- MOLDE:FIM -->
 
-1. `PADROES.md` (raiz deste repo) — o catálogo normativo. A **§10** é o que o molde
-   NÃO tem: cada item nasceu de um incidente real. Leia antes de criar estrutura nova.
-2. O código do repo de referência em `../tesouro-direto-api` (adicione com
-   `/add-dir ../tesouro-direto-api` no início da sessão; somente leitura).
+Três fontes, nesta ordem:
+
+1. `PADROES.md` (raiz deste repo) — o catálogo normativo. A **§10** é a parte aprendida
+   por incidente, não por leitura: cada item custou algo em produção. Leia antes de
+   criar estrutura nova.
+2. O código deste repo como molde vivo; e `../tesouro-direto-api` para o que não existe
+   aqui (adicione com `/add-dir ../tesouro-direto-api`; somente leitura).
 3. `LEIA-ME-KIT.md` (raiz deste repo) — o que o `PADROES.md` não cobre por não ser
    regra de código: **o critério de pronto de uma fase** ("O que o F1 tem que
    alcançar"), as armadilhas de infra, e os **erros de orquestração — o que o CONDUTOR
@@ -19,8 +28,8 @@ Este projeto segue os padrões do repo `tesouro-direto-api`. Três fontes, nesta
    alguém notar.
 
 Regra de ouro: **antes de criar qualquer estrutura nova (endpoint, repositório,
-job, client, teste), localize o equivalente no repo de referência e siga o molde.**
-Se PADROES.md e o código de referência divergirem, o código vence. Desvio de
+job, client, teste), localize o equivalente no molde e siga.**
+Se PADROES.md e o código do molde divergirem, o código vence. Desvio de
 padrão só com justificativa explícita, aprovada pelo `advisor` e gravada na memória.
 
 ## Roteamento de tarefas

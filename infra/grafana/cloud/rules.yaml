@@ -102,6 +102,65 @@ groups:
           severity: critical
           service: hub-precos
         isPaused: false
+      - uid: hub-sem-metrica
+        title: Hub — Serviço sumiu do scrape
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: __DS_PROM__
+            model:
+              expr: absent(up{job="hub-precos"})
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0
+                    type: gt
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        dashboardUid: ""
+        panelId: 0
+        noDataState: OK
+        execErrState: Alerting
+        for: 10m
+        annotations:
+          summary: Nenhuma série com job="hub-precos" chegando ao Grafana Cloud
+          description: >-
+            Esta regra vigia a própria observabilidade — é a única que dispara quando o
+            problema é NÃO haver dado. Todas as outras regras deste grupo dependem de
+            métricas do Hub existirem; se a série some, elas não disparam, ficam mudas, e
+            a ausência de alerta é lida como "está tudo bem". Foi assim que o Hub passou
+            semanas sem alerta nenhum na nuvem sem ninguém notar.
+            `absent()` de propósito, e não `up == 0`: `up == 0` só existe se o alvo ainda
+            estiver configurado e falhando; se alguém remove o alvo do scrape, renomeia o
+            container ou troca o `job=`, a série simplesmente deixa de existir e `up == 0`
+            nunca é verdade. `absent()` cobre os dois casos.
+            noDataState=OK, ao contrário das outras: `absent()` JÁ É o sinal, e devolve 1
+            quando não há dado. Marcar no-data como Alerting aqui faria a regra disparar
+            também quando o próprio datasource estivesse inacessível, misturando "o Hub
+            sumiu" com "o Grafana não respondeu" — dois problemas com donos diferentes.
+            10 minutos de `for` porque o scrape é de 30s: uma janela curta transformaria
+            deploy (que reinicia o container) em alerta. Se disparar, a ordem de
+            investigação é: o container está de pé na VPS? o alvo `hub-precos-app:8080`
+            ainda existe em `infra/alloy/config.alloy` no repo do tesouro-direto? o
+            `container_name` mudou? Ver PADROES.md §10.1 — nome de serviço no compose vira
+            alias DNS, e renomear quebra o scrape em silêncio.
+        labels:
+          severity: critical
+          service: hub-precos
+        isPaused: false
       - uid: hub-outbox-backlog-velho
         title: Hub — Backlog da outbox envelhecido
         condition: C

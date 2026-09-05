@@ -66,7 +66,18 @@ publicados no broker**.
 
 ## Regras de alerta (`cloud/rules.yaml`)
 
-Quatro regras, grupo `hub-alertas`, pasta `HubPrecos`:
+Cinco regras, grupo `hub-alertas`, pasta `HubPrecos`:
+
+- **Hub — Serviço sumiu do scrape**: `absent(up{job="hub-precos"})`, `for: 10m`. É a
+  regra que vigia a própria observabilidade — a única que dispara quando o problema é
+  NÃO haver dado. Todas as outras dependem de métricas do Hub existirem; se a série
+  some, elas ficam mudas, e ausência de alerta é lida como "está tudo bem". Foi assim
+  que o Hub passou semanas sem alerta nenhum na nuvem. `absent()` e não `up == 0`
+  porque `up == 0` só existe se o alvo ainda estiver configurado e falhando: quem
+  remove o alvo do scrape ou renomeia o container faz a série sumir, e `up == 0` nunca
+  fica verdadeiro. `noDataState: OK` ao contrário das outras — `absent()` já É o sinal,
+  e marcar no-data como Alerting misturaria "o Hub sumiu" com "o Grafana não
+  respondeu", que têm donos diferentes.
 
 - **Hub — Falha de ingestão**: mais de 3 ciclos de falha em 1h (metade dos 4 ciclos/hora
   do cron de 15min). `[1h] > 3`, não `[6h] > 0` como o TD, porque o TD importa 1x/dia e

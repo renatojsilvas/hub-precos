@@ -129,10 +129,14 @@ justificativa registrada na memória.
 
 ## 10. Lacunas do molde (aprendidas por incidente, não por leitura)
 
-Os itens de 1 a 9 vêm do repo de referência. **Os desta seção não** — cada um nasceu
-de algo que quebrou de verdade ao construir o `hub`, porque o molde não tinha o caso
-ou porque o porte perdeu uma peça. O molde continua sendo a fonte: o que esta seção
-diz é onde ele **não basta**.
+Os itens de 1 a 9 vieram do `tesouro-direto`, o repo que serviu de molde ao `hub`.
+**Os desta seção não** — cada um nasceu de algo que quebrou de verdade ao construir o
+`hub`, porque aquele repo não tinha o caso ou porque o porte perdeu uma peça.
+
+Com o `hub` promovido a molde da plataforma, esta seção deixa de ser "o que falta no
+molde" e passa a ser **o que o molde sabe porque doeu**. Ela não é opcional: os itens
+1 a 9 você reconhece lendo código, os desta seção não aparecem em código nenhum — só
+no incidente.
 
 Se você está criando `operacoes` ou `custodia`, leia isto **antes** de portar — foi
 escrito para você não repetir.

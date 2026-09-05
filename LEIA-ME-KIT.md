@@ -6,12 +6,14 @@
    carrega a regra, mas é aqui que estão o objetivo do F1, as armadilhas de infra e
    os erros de quem conduz — sem ele o repo novo herda o "o quê" e perde o "como não
    repetir".
-2. Clone o repo de referência como irmão: `git clone <tesouro-direto> ../tesouro-direto-api`
-   (somente leitura — jamais editar por aqui). O nome do diretório clonado precisa ser
-   exatamente `tesouro-direto-api`, conforme declarado em `CLAUDE.md` — essa divergência
-   impede os agents de localizar o molde.
-3. Na sessão do Claude Code: `/add-dir ../tesouro-direto-api` (dá aos agents acesso
-   de leitura ao código de referência). Confirme os agents com `/agents`.
+2. Clone o **molde** como irmão: `git clone <hub-precos> ../hub-precos` (somente
+   leitura — jamais editar por aqui). O nome do diretório precisa ser exatamente
+   `hub-precos`, conforme declarado em `CLAUDE.md` — divergência aí impede os agents de
+   localizar o molde. Clone também o `tesouro-direto` como `../tesouro-direto-api`: ele
+   é **referência secundária**, para os padrões que o hub não tem (projeto `*.Web`,
+   testes E2E, testes de carga).
+3. Na sessão do Claude Code: `/add-dir ../hub-precos` e `/add-dir ../tesouro-direto-api`
+   (dá aos agents acesso de leitura aos dois). Confirme os agents com `/agents`.
 4. Memória: `claude mcp add memoria -- npx -y @modelcontextprotocol/server-memory`
    e semeie com as ADRs 1–12 do plano de arquitetura (cole a seção 10 do
    `plano-hub-custodia.md` e peça para gravar como entidades/relações).
@@ -39,8 +41,11 @@
    ("Erros de orquestração"). Ela é sobre o que o condutor errou — não o executor —
    e cada item passou por suíte verde antes de alguém notar.
 
-Manutenção: quando um padrão evoluir no tesouro-direto-api, atualize PADROES.md
-aqui (é 1 arquivo, copiado entre os repos) — o guardião passa a cobrar o novo.
+Manutenção: o `PADROES.md` é 1 arquivo, copiado igual entre os repos — quando um
+padrão evoluir no molde, atualize-o **no `hub-precos`** e copie para os demais; o
+guardião passa a cobrar o novo. Padrão que evoluir no `tesouro-direto` (referência
+secundária) entra pelo mesmo caminho, mas passando pelo hub primeiro: é lá que se
+decide se vira padrão da plataforma.
 
 ---
 
