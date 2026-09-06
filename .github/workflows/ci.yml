@@ -103,7 +103,13 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          script_stop: true
+          # A parada em erro vem do `set -e` na primeira linha do script, NAO de
+          # `script_stop: true`: esse input foi removido do appleboy/ssh-action, e o tag
+          # flutuante `@v1` ja aponta para uma versao que nao o conhece — o run anota
+          # "Unexpected input(s) 'script_stop'" e segue. Ele estava aqui sem efeito
+          # nenhum; o `set -e` e que sempre fez o trabalho. No tesouro-direto o mesmo
+          # input tinha consequencia real (o script de la nao tinha `set -e`) e o modo de
+          # falha da 77.0 ficou reaberto por tempo indeterminado.
           envs: HUB_APP_PASSWORD,HUB_API_KEY,TD_API_KEY,RABBITMQ_USER,RABBITMQ_PASSWORD
           script: |
             set -e
