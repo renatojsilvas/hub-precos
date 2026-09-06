@@ -5,6 +5,7 @@ using Hub.Domain.Common;
 using Hub.Domain.Outbox;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
+using RabbitMQ.Client.Exceptions;
 
 namespace Hub.Infrastructure.Messaging;
 
@@ -24,8 +25,6 @@ public sealed class RabbitMqEventPublisher(
                 new CreateChannelOptions(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true),
                 ct);
 
-            var publicacoes = new List<Task>(lote.Count);
-
             foreach (var mensagem in lote)
             {
                 var properties = new BasicProperties
@@ -38,14 +37,9 @@ public sealed class RabbitMqEventPublisher(
 
                 var body = Encoding.UTF8.GetBytes(mensagem.Payload);
 
-                publicacoes.Add(channel
-                    .BasicPublishAsync(connectionProvider.Exchange, mensagem.RoutingKey, false, properties, body, ct)
-                    .AsTask());
-            }
+                await channel.BasicPublishAsync(
+                    connectionProvider.Exchange, mensagem.RoutingKey, false, properties, body, ct);
 
-            foreach (var publicacao in publicacoes)
-            {
-                await publicacao;
                 confirmados++;
             }
 
@@ -54,6 +48,10 @@ public sealed class RabbitMqEventPublisher(
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
+        }
+        catch (PublishException) when (confirmados == 0)
+        {
+            return Result<int>.Failure(OutboxErrors.PublicacaoRejeitada);
         }
         catch (Exception ex)
         {

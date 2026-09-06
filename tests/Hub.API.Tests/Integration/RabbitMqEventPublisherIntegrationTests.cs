@@ -172,4 +172,129 @@ public sealed class RabbitMqEventPublisherIntegrationTests : IAsyncLifetime
         Assert.True(resultado!.IsFailure);
         Assert.Equal(OutboxErrors.BrokerIndisponivel.Code, resultado.Error.Code);
     }
+
+    private async Task<(RabbitMqConnectionProvider ConnectionProvider, string FilaRestrita, string FilaLivre)>
+        CriarTopologiaComFilaRestritaAsync(string exchange, string routingKeyRestrita, string routingKeyLivre)
+    {
+        var connectionProvider = CriarConnectionProvider(exchange);
+        var connection = await connectionProvider.ObterConexaoAsync(CancellationToken.None);
+
+        await using (var channel = await connection.CreateChannelAsync())
+        {
+            await channel.QueueDeclareAsync(
+                queue: "restrita",
+                durable: false,
+                exclusive: false,
+                autoDelete: false,
+                arguments: new Dictionary<string, object?> { ["x-max-length"] = 0, ["x-overflow"] = "reject-publish" });
+            await channel.QueueBindAsync("restrita", exchange, routingKeyRestrita);
+
+            await channel.QueueDeclareAsync(queue: "livre", durable: false, exclusive: false, autoDelete: false);
+            await channel.QueueBindAsync("livre", exchange, routingKeyLivre);
+        }
+
+        return (connectionProvider, "restrita", "livre");
+    }
+
+    [Fact]
+    public async Task PublicarAsync_MesmoLoteRepetidoTresVezesComPrimeiraMensagemVenenosa_NaoAmplificaFilaLivre()
+    {
+        const string exchange = "prices-veneno-head-of-line";
+        const string routingKeyRestrita = "precos.observado.veneno.restrita";
+        const string routingKeyLivre = "precos.observado.veneno.livre";
+
+        var (connectionProvider, _, filaLivre) =
+            await CriarTopologiaComFilaRestritaAsync(exchange, routingKeyRestrita, routingKeyLivre);
+        await using var _ = connectionProvider;
+
+        var lote = new[]
+        {
+            new OutboxPendente(1, "PrecoObservado", routingKeyRestrita, "{}"),
+            new OutboxPendente(2, "PrecoObservado", routingKeyLivre, "{}"),
+            new OutboxPendente(3, "PrecoObservado", routingKeyLivre, "{}")
+        };
+
+        var publisher = new RabbitMqEventPublisher(connectionProvider, NullLogger<RabbitMqEventPublisher>.Instance);
+
+        for (var ciclo = 0; ciclo < 3; ciclo++)
+        {
+            var resultado = await publisher.PublicarAsync(lote, CancellationToken.None);
+
+            Assert.True(resultado.IsFailure);
+            Assert.Equal(OutboxErrors.PublicacaoRejeitada.Code, resultado.Error.Code);
+        }
+
+        var connection = await connectionProvider.ObterConexaoAsync(CancellationToken.None);
+        await using var channel = await connection.CreateChannelAsync();
+
+        var recebidasNaFilaLivre = 0;
+        while (await channel.BasicGetAsync(filaLivre, autoAck: true) is not null)
+        {
+            recebidasNaFilaLivre++;
+        }
+
+        Assert.Equal(0, recebidasNaFilaLivre);
+    }
+
+    [Fact]
+    public async Task PublicarAsync_FalhaNoMeioDoLote_ConfirmadosIgualAsMensagensRealmenteEntreguesNaFilaLivre()
+    {
+        const string exchange = "prices-veneno-meio-do-lote";
+        const string routingKeyRestrita = "precos.observado.meio.restrita";
+        const string routingKeyLivre = "precos.observado.meio.livre";
+
+        var (connectionProvider, _, filaLivre) =
+            await CriarTopologiaComFilaRestritaAsync(exchange, routingKeyRestrita, routingKeyLivre);
+        await using var _ = connectionProvider;
+
+        var lote = new[]
+        {
+            new OutboxPendente(1, "PrecoObservado", routingKeyLivre, "{}"),
+            new OutboxPendente(2, "PrecoObservado", routingKeyLivre, "{}"),
+            new OutboxPendente(3, "PrecoObservado", routingKeyRestrita, "{}"),
+            new OutboxPendente(4, "PrecoObservado", routingKeyLivre, "{}")
+        };
+
+        var publisher = new RabbitMqEventPublisher(connectionProvider, NullLogger<RabbitMqEventPublisher>.Instance);
+        var resultado = await publisher.PublicarAsync(lote, CancellationToken.None);
+
+        Assert.True(resultado.IsSuccess);
+        Assert.Equal(2, resultado.Value);
+
+        var connection = await connectionProvider.ObterConexaoAsync(CancellationToken.None);
+        await using var channel = await connection.CreateChannelAsync();
+
+        var recebidasNaFilaLivre = 0;
+        while (await channel.BasicGetAsync(filaLivre, autoAck: true) is not null)
+        {
+            recebidasNaFilaLivre++;
+        }
+
+        Assert.Equal(resultado.Value, recebidasNaFilaLivre);
+    }
+
+    [Fact]
+    public async Task PublicarAsync_FilaDestinoRejeitaComNack_DevolveResultFailurePublicacaoRejeitadaSemLancar()
+    {
+        const string exchange = "prices-nack-primeira-mensagem";
+        const string routingKeyRestrita = "precos.observado.nack.restrita";
+        const string routingKeyLivre = "precos.observado.nack.livre";
+
+        var (connectionProvider, _, filaLivre) =
+            await CriarTopologiaComFilaRestritaAsync(exchange, routingKeyRestrita, routingKeyLivre);
+        await using var _ = connectionProvider;
+
+        var lote = new[] { new OutboxPendente(1, "PrecoObservado", routingKeyRestrita, "{}") };
+
+        var publisher = new RabbitMqEventPublisher(connectionProvider, NullLogger<RabbitMqEventPublisher>.Instance);
+
+        Result<int>? resultado = null;
+        var excecao = await Record.ExceptionAsync(async () =>
+            resultado = await publisher.PublicarAsync(lote, CancellationToken.None));
+
+        Assert.Null(excecao);
+        Assert.NotNull(resultado);
+        Assert.True(resultado!.IsFailure);
+        Assert.Equal(OutboxErrors.PublicacaoRejeitada.Code, resultado.Error.Code);
+    }
 }
