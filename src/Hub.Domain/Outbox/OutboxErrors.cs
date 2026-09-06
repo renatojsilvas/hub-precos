@@ -19,6 +19,9 @@ public static class OutboxErrors
     public static readonly Error BrokerIndisponivel =
         new("Outbox.BrokerIndisponivel", "Broker de mensageria indisponível para publicação da outbox.");
 
+    public static readonly Error PublicacaoRejeitada =
+        new("Outbox.PublicacaoRejeitada", "Broker rejeitou a publicação da mensagem de outbox.");
+
     public static readonly Error FalhaAoMarcarPublicado =
         new("Outbox.FalhaAoMarcarPublicado", "Falha ao marcar mensagens da outbox como publicadas.");
 }
