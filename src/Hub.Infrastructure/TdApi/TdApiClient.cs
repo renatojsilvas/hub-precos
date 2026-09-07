@@ -17,6 +17,7 @@ public sealed class TdApiClient(
     ILogger<TdApiClient> logger) : ITdApiClient
 {
     private const int PageSize = 500;
+    private const int MaxPaginas = 100;
     private const string TitulosRequestUri = "v1/titulos";
     private const string DataFormat = "yyyy-MM-dd";
 
@@ -63,11 +64,11 @@ public sealed class TdApiClient(
                 return AdapterErrors.TdApiHttpError;
             }
 
-            List<TituloResponse>? titulos;
+            List<TituloResponse?>? titulosBrutos;
             try
             {
                 using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-                titulos = await JsonSerializer.DeserializeAsync<List<TituloResponse>>(stream, JsonOptions, cancellationToken);
+                titulosBrutos = await JsonSerializer.DeserializeAsync<List<TituloResponse?>>(stream, JsonOptions, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -79,9 +80,27 @@ public sealed class TdApiClient(
                 return AdapterErrors.TdApiRespostaInvalida;
             }
 
-            if (titulos is null)
+            if (titulosBrutos is null)
             {
                 return AdapterErrors.TdApiRespostaInvalida;
+            }
+
+            var titulos = new List<TituloResponse>(titulosBrutos.Count);
+            var descartados = 0;
+            foreach (var tituloBruto in titulosBrutos)
+            {
+                if (tituloBruto is null)
+                {
+                    descartados++;
+                    continue;
+                }
+
+                titulos.Add(tituloBruto);
+            }
+
+            if (descartados > 0)
+            {
+                logger.LogWarning("Discarded {Descartados} null titulos from TD API response.", descartados);
             }
 
             var newEtag = response.Headers.ETag?.ToString();
@@ -129,13 +148,14 @@ public sealed class TdApiClient(
 
             var totalCount = 0;
             var hasTotalCount = response.Headers.TryGetValues("X-Total-Count", out var totalCountValues)
-                && int.TryParse(totalCountValues.FirstOrDefault(), NumberStyles.Integer, CultureInfo.InvariantCulture, out totalCount);
+                && int.TryParse(totalCountValues.FirstOrDefault(), NumberStyles.Integer, CultureInfo.InvariantCulture, out totalCount)
+                && totalCount > 0;
 
-            List<PrecoTaxaResponse>? precos;
+            List<PrecoTaxaResponse?>? precosBrutos;
             try
             {
                 using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-                precos = await JsonSerializer.DeserializeAsync<List<PrecoTaxaResponse>>(stream, JsonOptions, cancellationToken);
+                precosBrutos = await JsonSerializer.DeserializeAsync<List<PrecoTaxaResponse?>>(stream, JsonOptions, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -147,9 +167,27 @@ public sealed class TdApiClient(
                 return AdapterErrors.TdApiRespostaInvalida;
             }
 
-            if (precos is null)
+            if (precosBrutos is null)
             {
                 return AdapterErrors.TdApiRespostaInvalida;
+            }
+
+            var precos = new List<PrecoTaxaResponse>(precosBrutos.Count);
+            var descartados = 0;
+            foreach (var itemBruto in precosBrutos)
+            {
+                if (itemBruto is null)
+                {
+                    descartados++;
+                    continue;
+                }
+
+                precos.Add(itemBruto);
+            }
+
+            if (descartados > 0)
+            {
+                logger.LogWarning("Discarded {Descartados} null precos in ancora response for {Codigo}.", descartados, codigo);
             }
 
             var total = hasTotalCount ? totalCount : precos.Count;
@@ -186,10 +224,10 @@ public sealed class TdApiClient(
 
         var page = 1;
         var itemsFetched = 0;
-        var hasTotalCount = false;
-        var totalCount = 0;
+        int? totalCount = null;
+        var coletaCompleta = false;
 
-        do
+        while (page <= MaxPaginas)
         {
             var requestUri = BuildPrecosRequestUri(codigo, dataInicio, dataFim, page);
 
@@ -215,7 +253,7 @@ public sealed class TdApiClient(
                 yield break;
             }
 
-            List<PrecoTaxaResponse>? precos = null;
+            List<PrecoTaxaResponse?>? paginaBruta = null;
             Error? falhaDeLeitura = null;
             using (response)
             {
@@ -227,16 +265,19 @@ public sealed class TdApiClient(
                 }
                 else
                 {
-                    if (page == 1)
+                    if (page == 1
+                        && response.Headers.TryGetValues("X-Total-Count", out var totalCountValues)
+                        && int.TryParse(
+                            totalCountValues.FirstOrDefault(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var total)
+                        && total > 0)
                     {
-                        hasTotalCount = response.Headers.TryGetValues("X-Total-Count", out var totalCountValues)
-                            && int.TryParse(totalCountValues.FirstOrDefault(), NumberStyles.Integer, CultureInfo.InvariantCulture, out totalCount);
+                        totalCount = total;
                     }
 
                     try
                     {
                         using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-                        precos = await JsonSerializer.DeserializeAsync<List<PrecoTaxaResponse>>(stream, JsonOptions, cancellationToken);
+                        paginaBruta = await JsonSerializer.DeserializeAsync<List<PrecoTaxaResponse?>>(stream, JsonOptions, cancellationToken);
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
@@ -256,15 +297,39 @@ public sealed class TdApiClient(
                 yield break;
             }
 
-            if (precos is null)
+            if (paginaBruta is null)
             {
                 yield return AdapterErrors.TdApiRespostaInvalida;
                 yield break;
             }
 
-            if (precos.Count == 0)
+            itemsFetched += paginaBruta.Count;
+
+            var descartados = 0;
+            var precos = new List<PrecoTaxaResponse>(paginaBruta.Count);
+            foreach (var itemBruto in paginaBruta)
             {
-                yield break;
+                if (itemBruto is null)
+                {
+                    descartados++;
+                    continue;
+                }
+
+                precos.Add(itemBruto);
+            }
+
+            if (descartados > 0)
+            {
+                logger.LogWarning("Discarded {Descartados} null precos for {Codigo}.", descartados, codigo);
+            }
+
+            if (totalCount is int totalAnunciadoNestaPagina && itemsFetched > totalAnunciadoNestaPagina)
+            {
+                logger.LogWarning(
+                    "TD API announced X-Total-Count {TotalAnunciado} but the collection already gathered {Coletados} " +
+                    "items for {Codigo}; discarding the inconsistent header and following pagination by page size.",
+                    totalAnunciadoNestaPagina, itemsFetched, codigo);
+                totalCount = null;
             }
 
             foreach (var preco in precos)
@@ -272,10 +337,39 @@ public sealed class TdApiClient(
                 yield return preco;
             }
 
-            itemsFetched += precos.Count;
+            if (paginaBruta.Count == 0 || paginaBruta.Count < PageSize)
+            {
+                coletaCompleta = true;
+                break;
+            }
+
+            if (totalCount is int totalConhecido && itemsFetched == totalConhecido)
+            {
+                coletaCompleta = true;
+                break;
+            }
+
             page++;
         }
-        while (hasTotalCount && itemsFetched < totalCount);
+
+        if (!coletaCompleta)
+        {
+            logger.LogError(
+                "Collection of precos for {Codigo} reached the {MaxPaginas}-page limit without completing; " +
+                "discarding the partial result.",
+                codigo, MaxPaginas);
+            yield return AdapterErrors.TdApiColetaIncompleta;
+            yield break;
+        }
+
+        if (totalCount is int totalAnunciado && itemsFetched < totalAnunciado)
+        {
+            logger.LogError(
+                "TD API announced X-Total-Count {TotalAnunciado} but the collection gathered only {Coletados} items " +
+                "for {Codigo}; discarding the truncated result.",
+                totalAnunciado, itemsFetched, codigo);
+            yield return AdapterErrors.TdApiColetaIncompleta;
+        }
     }
 
     private bool TryGetBaseUrl(out Uri? baseUri)

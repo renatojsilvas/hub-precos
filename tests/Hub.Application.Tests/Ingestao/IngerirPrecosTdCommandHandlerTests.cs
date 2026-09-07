@@ -658,9 +658,9 @@ public sealed class IngerirPrecosTdCommandHandlerTests
             Result<DiscoveryResultado>.Success(new DiscoveryResultado(true, 0, 0, 0)),
             fetchLidoFactory: (_, _, _) => ComoLidos(
             [
-                new PrecoLido(1, precoBom1),
-                new PrecoLido(2, erroLinha),
-                new PrecoLido(3, precoBom2),
+                new PrecoLido(1, precoBom1, TruncaColeta: false),
+                new PrecoLido(2, erroLinha, TruncaColeta: false),
+                new PrecoLido(3, precoBom2, TruncaColeta: false),
             ]));
 
         var read = new FakeIngestaoReadRepository(
@@ -692,8 +692,8 @@ public sealed class IngerirPrecosTdCommandHandlerTests
             Result<DiscoveryResultado>.Success(new DiscoveryResultado(true, 0, 0, 0)),
             fetchLidoFactory: (_, _, _) => ComoLidos(
             [
-                new PrecoLido(1, precoBom),
-                new PrecoLido(2, erroClient),
+                new PrecoLido(1, precoBom, TruncaColeta: false),
+                new PrecoLido(2, erroClient, TruncaColeta: true),
             ]));
 
         var read = new FakeIngestaoReadRepository(
@@ -725,6 +725,82 @@ public sealed class IngerirPrecosTdCommandHandlerTests
         {
             yield return item;
         }
+    }
+
+    [Theory]
+    [InlineData("TdApi.ColetaIncompleta", "TD API pagination stopped by a page or total-count limit before completion; partial result discarded.")]
+    [InlineData("TdApi.UrlNaoConfigurada", "TdApi:BaseUrl is not configured or is not a valid absolute URL.")]
+    public async Task Handle_ErroDeStreamComCodigoDeAdapterConhecido_ContaOInstrumentoComoFalho(
+        string codigoDoErro, string descricaoDoErro)
+    {
+        var watermark = new DateOnly(2026, 8, 15);
+        var wm = new WatermarkInstrumento("td:a", "cod-a", watermark, null);
+
+        var precoBom = CriarPriceObserved("td:a", new DateOnly(2026, 8, 20), Campos.PuVenda, 100m);
+        var erroDeStream = new Error(codigoDoErro, descricaoDoErro);
+
+        var adapter = new FakePriceSourceAdapter(
+            Result<DiscoveryResultado>.Success(new DiscoveryResultado(true, 0, 0, 0)),
+            fetchLidoFactory: (_, _, _) => ComoLidos(
+            [
+                new PrecoLido(1, precoBom, TruncaColeta: false),
+                new PrecoLido(2, erroDeStream, TruncaColeta: true),
+            ]));
+
+        var read = new FakeIngestaoReadRepository(
+            watermarksResult: Result<IReadOnlyList<WatermarkInstrumento>>.Success([wm]));
+
+        var precoWrite = new FakePrecoWriteRepository();
+        var outboxWrite = new FakeOutboxWriteRepository();
+        var unitOfWork = new FakeUnitOfWork();
+        var handler = CriarHandler(adapter, read, precoWrite, outboxWrite, unitOfWork);
+
+        var resultado = await handler.Handle(new IngerirPrecosTdCommand(), CancellationToken.None);
+
+        Assert.True(resultado.IsSuccess);
+        Assert.Equal(1, resultado.Value.InstrumentosComFalha);
+        Assert.Equal(1, resultado.Value.LinhasComErro);
+        Assert.Single(precoWrite.Adicionados);
+    }
+
+    public static TheoryData<bool, int, string> MarcacaoQueContradizOCodigo() => new()
+    {
+        { true, 1, AdapterErrors.TdApiDataBaseInvalida.Code },
+        { false, 0, AdapterErrors.TdApiHttpError.Code },
+    };
+
+    [Theory]
+    [MemberData(nameof(MarcacaoQueContradizOCodigo))]
+    public async Task Handle_DecideInstrumentoComoFalhoPelaMarcacaoDoLido_NuncaPeloCodigoDoErro(
+        bool truncaColeta, int instrumentosComFalhaEsperado, string codigoQueContradizAMarcacao)
+    {
+        var erroInventado = new Error(codigoQueContradizAMarcacao, "erro arbitrário só deste teste.");
+
+        var watermark = new DateOnly(2026, 8, 15);
+        var wm = new WatermarkInstrumento("td:a", "cod-a", watermark, null);
+        var precoBom = CriarPriceObserved("td:a", new DateOnly(2026, 8, 20), Campos.PuVenda, 100m);
+
+        var adapter = new FakePriceSourceAdapter(
+            Result<DiscoveryResultado>.Success(new DiscoveryResultado(true, 0, 0, 0)),
+            fetchLidoFactory: (_, _, _) => ComoLidos(
+            [
+                new PrecoLido(1, precoBom, TruncaColeta: false),
+                new PrecoLido(2, erroInventado, truncaColeta),
+            ]));
+
+        var read = new FakeIngestaoReadRepository(
+            watermarksResult: Result<IReadOnlyList<WatermarkInstrumento>>.Success([wm]));
+
+        var precoWrite = new FakePrecoWriteRepository();
+        var outboxWrite = new FakeOutboxWriteRepository();
+        var unitOfWork = new FakeUnitOfWork();
+        var handler = CriarHandler(adapter, read, precoWrite, outboxWrite, unitOfWork);
+
+        var resultado = await handler.Handle(new IngerirPrecosTdCommand(), CancellationToken.None);
+
+        Assert.True(resultado.IsSuccess);
+        Assert.Equal(instrumentosComFalhaEsperado, resultado.Value.InstrumentosComFalha);
+        Assert.Single(precoWrite.Adicionados);
     }
 
     [Fact]

@@ -50,7 +50,7 @@ internal sealed class FakePriceSourceAdapter : IPriceSourceAdapter
         await foreach (var po in _fetchFactory(codigoNaFonte, dataInicio, ct))
         {
             linha++;
-            yield return new PrecoLido(linha, po);
+            yield return new PrecoLido(linha, po, TruncaColeta: false);
         }
     }
 

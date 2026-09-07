@@ -49,7 +49,7 @@ public sealed class IngerirPrecosTdCommandHandlerIntegrationTests
             foreach (var item in fetchFactory(codigoNaFonte, dataInicio))
             {
                 linha++;
-                yield return new PrecoLido(linha, item);
+                yield return new PrecoLido(linha, item, TruncaColeta: false);
             }
         }
     }
