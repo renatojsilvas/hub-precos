@@ -449,3 +449,87 @@ asserção equivalente sobre o que existe** em vez de só apagar: aqui o smoke t
 `/v1/instruments` virou "sem chave → 401 **e** com a chave → 404", que juntas provam que
 o middleware está ativo e que a chave confere — enquanto só o 401 passaria também com a
 chave errada.
+
+### 10.21. Coleta paginada tem que distinguir "parei porque acabou" de "parei porque bati num limite"
+
+Nota de numeração: esta é a **mesma regra** registrada como §10.31 no `PADROES.md` do `operacoes`.
+Os dois arquivos divergiram em numeração (o do `operacoes` carrega incidentes que só ocorreram
+lá); ao citar entre repos, cite pelo título, não pelo número.
+
+Todo laço que coleta páginas de um serviço externo tem **mais de uma** condição de parada. Cada
+uma precisa ser classificada como **completude** (coletei tudo) ou **limite** (parei antes), e as
+duas têm que produzir resultados **diferentes**: completude devolve sucesso; limite devolve falha.
+Parada por limite devolvida como sucesso é conjunto parcial apresentado como completo.
+
+**Por quê:** o `TdApiClient.GetPrecosAsync` deste repo tinha o defeito em três formas, todas
+achadas de uma vez ao portar de volta a correção feita no `operacoes` (mesma dinâmica da §10.20 —
+comparar com o repo irmão acha o que está errado nos dois):
+
+1. **Header ausente virava parada silenciosa.** O laço era `while (hasTotalCount && ...)`: sem
+   `X-Total-Count`, encerrava depois da primeira página, sem log e sem falha. Não havia critério
+   de página cheia/parcial — o header era o **único** sinal de continuidade.
+2. **Header consumido sem validação.** `int.TryParse` aceitava qualquer inteiro. Com `0`, negativo
+   ou **menor que o já coletado**, a condição `itemsFetched < totalCount` ficava falsa cedo e a
+   coleta terminava na primeira página, em sucesso.
+3. **Item `null` no array** escapava como `ArgumentNullException` através da conversão implícita
+   para `Result<T>.Success`, **fora** dos `try/catch` do método, derrubando o `await foreach` do
+   adapter. Payload de terceiro virando exceção não tratada.
+
+E dois testes **documentavam e aprovavam** o truncamento
+(`..._QuandoXTotalCountAusente_ParaAposAPrimeiraPagina...`,
+`..._QuandoXTotalCountZero_ParaSemLoopInfinito`): o nome tratava "parar cedo" como a propriedade
+desejada. Teste que aprova o defeito é pior que teste ausente — ele **bloqueia** a correção certa
+no futuro, porque quem tentar consertar vai encontrar um teste dizendo que o comportamento errado
+é o esperado.
+
+**A gravidade não é "faltam itens na lista".** O `TdApiAdapter` só marca `truncado` quando recebe
+um `Result` de falha; a parada silenciosa não produzia item nenhum, então o backfill seguia **como
+se a janela estivesse completa** — preço faltando no Hub, sem sinal, e o Hub alimenta todo mundo.
+
+**Guarda:**
+- Enumere as condições de parada e classifique cada uma. Aqui são quatro: página parcial
+  (completude), total anunciado atingido na igualdade exata (completude), teto de páginas
+  (`MaxPaginas`, limite → falha), total anunciado maior que o coletado ao fim (limite → falha).
+- Metadado do outro serviço só vale enquanto for **consistente com o que você já viu**: aceite
+  `X-Total-Count` só se `> 0`, e **descarte-o com `LogWarning`** se o coletado ultrapassá-lo.
+  Descartar faz coletar **mais**, nunca menos — é a direção segura.
+- Separe os rótulos: `TdApi.HttpError` (transitório, "tente novamente" é honesto) ×
+  `TdApi.ColetaIncompleta` (estrutural e determinístico). É o corolário de rótulo da §10.12.
+- Some o total **bruto** da página **antes** de descartar item inválido. Somar depois faz um
+  descarte legítimo parecer truncamento e vira falha indevida — trocar truncamento silencioso por
+  503 espúrio não é progresso. Há teste de regressão travando essa ordem.
+- Teste o **boundary**: total anunciado múltiplo exato do `PageSize` com a última página **cheia**
+  é o único cenário que exercita o corte por igualdade; casos com página parcial encerram pelo
+  outro ramo e deixam esse código sem cobertura.
+
+**Nota sobre mutante equivalente:** depois que a guarda de descarte existe, trocar
+`itemsFetched == totalConhecido` por `>=` não quebra teste nenhum, e isso está **certo** — o
+descarte garante que ali `itemsFetched` nunca excede o total. Mutação que sobrevive nem sempre é
+buraco de cobertura; às vezes é redundância. Não torça o teste para matá-la.
+
+### 10.22. Quem sabe a diferença é quem deve marcá-la, não quem consome
+
+Se um produtor já distingue dois casos estruturalmente, ele tem que **marcar** essa distinção no
+dado. O consumidor não pode re-derivá-la por heurística sobre o conteúdo — código de erro,
+mensagem, tipo. Toda re-derivação apodrece no primeiro caso novo.
+
+**Por quê:** `IngerirPrecosTdCommandHandler` decidia se um instrumento era truncado comparando o
+`Error.Code` contra uma **allowlist de dois códigos**. Ela já nascera incompleta
+(`TdApiUrlNaoConfigurada` nunca esteve nela). Inverter para "tudo que não for
+`TdApiDataBaseInvalida`" pareceu resolver e **gerou regressão na mesma branch**: não cobria
+`PrecoErrors.DataRefVazia`, também de linha, que passou a inflar `instrumentosComFalha`. Seria a
+terceira encarnação da mesma lista.
+
+E o teste escrito para proteger a lista varria só `typeof(AdapterErrors)` — era **cego** a erros de
+domínio, que é de onde veio a regressão. Guarda que só enxerga um catálogo não guarda contra o
+outro.
+
+O `TdApiAdapter` **já sabia** a resposta: erro de stream é seguido de `break`, erro de linha de
+`continue`. A informação existia e estava sendo jogada fora, para ser adivinhada rio abaixo.
+
+**Guarda:** `PrecoLido` carrega `TruncaColeta`, **obrigatório** (sem default — default `false`
+faria um produtor futuro esquecer de marcar erro de stream, em silêncio, que é o mesmo default
+inseguro de origem). O handler decide só por ele; nenhum código de erro é consultado em decisão
+nenhuma no repo. O teste usa códigos que uma decisão-por-código classificaria **ao contrário** da
+marcação, nos dois sentidos — assim qualquer reintrodução reprova nos dois casos, e não por
+coincidência num só.

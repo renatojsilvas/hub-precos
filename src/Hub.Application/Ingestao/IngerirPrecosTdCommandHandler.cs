@@ -218,8 +218,7 @@ public sealed class IngerirPrecosTdCommandHandler(
                         "Linha rejeitada na ingestão TD para {InstrumentoId} (linha {Linha}): {Code} - {Description}",
                         wm.InstrumentoId, lido.Linha, lido.Preco.Error.Code, lido.Preco.Error.Description);
 
-                    if (lido.Preco.Error.Code == AdapterErrors.TdApiHttpError.Code
-                        || lido.Preco.Error.Code == AdapterErrors.TdApiRespostaInvalida.Code)
+                    if (lido.TruncaColeta)
                     {
                         instrumentoTruncado = true;
                     }

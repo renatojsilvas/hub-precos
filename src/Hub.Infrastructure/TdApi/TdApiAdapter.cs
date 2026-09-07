@@ -296,7 +296,7 @@ public sealed class TdApiAdapter(
 
                 if (precoResult.IsFailure)
                 {
-                    yield return new PrecoLido(linha, precoResult.Error);
+                    yield return new PrecoLido(linha, precoResult.Error, TruncaColeta: true);
                     truncado = true;
                     break;
                 }
@@ -309,7 +309,7 @@ public sealed class TdApiAdapter(
                     logger.LogWarning(
                         "Skipping preco with unparseable dataBase {DataBase} for {Codigo}",
                         preco.DataBase, codigoNaFonte);
-                    yield return new PrecoLido(linha, AdapterErrors.TdApiDataBaseInvalida);
+                    yield return new PrecoLido(linha, AdapterErrors.TdApiDataBaseInvalida, TruncaColeta: false);
                     continue;
                 }
 
@@ -319,7 +319,7 @@ public sealed class TdApiAdapter(
                     logger.LogWarning(
                         "Skipping preco with invalid dataBase {DataBase} for {Codigo}: {Description}",
                         preco.DataBase, codigoNaFonte, dataRefResult.Error.Description);
-                    yield return new PrecoLido(linha, dataRefResult.Error);
+                    yield return new PrecoLido(linha, dataRefResult.Error, TruncaColeta: false);
                     continue;
                 }
 
@@ -328,7 +328,7 @@ public sealed class TdApiAdapter(
 
                 foreach (var priceObserved in CriarPriceObserved(instrumentoId, dataRef, fonte, observadoEm, preco))
                 {
-                    yield return new PrecoLido(linha, priceObserved);
+                    yield return new PrecoLido(linha, priceObserved, TruncaColeta: false);
                 }
             }
 

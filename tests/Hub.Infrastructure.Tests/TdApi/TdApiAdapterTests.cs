@@ -3,6 +3,7 @@ using Hub.Application.Adapters;
 using Hub.Domain.Common;
 using Hub.Domain.Fontes;
 using Hub.Domain.Instrumentos;
+using Hub.Domain.Precos;
 using Hub.Infrastructure.TdApi;
 using Hub.Infrastructure.Tests.Common;
 using Microsoft.Extensions.Configuration;
@@ -358,6 +359,31 @@ public sealed class TdApiAdapterTests
         Assert.Equal(1, item.Linha);
         Assert.True(item.Preco.IsFailure);
         Assert.Equal(AdapterErrors.TdApiHttpError.Code, item.Preco.Error.Code);
+        Assert.True(item.TruncaColeta);
+
+        Assert.Single(client.PrecosCalls);
+    }
+
+    [Fact]
+    public async Task FetchAsync_ComFalhaDeColetaIncompletaDoClient_RepassaAFalhaEParaSemBuscarAProximaJanela()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["TdApi:JanelaBackfillAnos"] = "1" })
+            .Build();
+        var timeProvider = new FakeTimeProvider(Agora);
+        var client = new FakeTdApiClient(
+            Result<TitulosResponse>.Success(new TitulosResponse(false, [])),
+            precosResultFactory: (_, _, _) => [Result<PrecoTaxaResponse>.Failure(AdapterErrors.TdApiColetaIncompleta)]);
+        var adapter = CriarAdapter(
+            client, new FakeInstrumentoWriteRepository(), new FakeUnitOfWork(), timeProvider, configuration);
+
+        var itens = await ColetarLidos(adapter.FetchAsync("titulo-x", new DateOnly(2024, 1, 1), CancellationToken.None));
+
+        var item = Assert.Single(itens);
+        Assert.Equal(1, item.Linha);
+        Assert.True(item.Preco.IsFailure);
+        Assert.Equal(AdapterErrors.TdApiColetaIncompleta.Code, item.Preco.Error.Code);
+        Assert.True(item.TruncaColeta);
 
         Assert.Single(client.PrecosCalls);
     }
@@ -381,14 +407,44 @@ public sealed class TdApiAdapterTests
         Assert.True(itens[0].Preco.IsSuccess);
         Assert.Equal(1, itens[0].Linha);
         Assert.Equal(1.1m, itens[0].Preco.Value.Valor);
+        Assert.False(itens[0].TruncaColeta);
 
         Assert.True(itens[1].Preco.IsFailure);
         Assert.Equal(2, itens[1].Linha);
         Assert.Equal(AdapterErrors.TdApiDataBaseInvalida.Code, itens[1].Preco.Error.Code);
+        Assert.False(itens[1].TruncaColeta);
 
         Assert.True(itens[2].Preco.IsSuccess);
         Assert.Equal(3, itens[2].Linha);
         Assert.Equal(1.3m, itens[2].Preco.Value.Valor);
+        Assert.False(itens[2].TruncaColeta);
+    }
+
+    [Fact]
+    public async Task FetchAsync_ComDataRefVaziaEntreLinhasBoas_EmitePrecoLidoDeFalhaSemMarcarTruncaColetaEMantemAsBoas()
+    {
+        var precoBom1 = new PrecoTaxaResponse("2026-01-05", 1.1m, null, null, null, null);
+        var precoRuim = new PrecoTaxaResponse("0001-01-01", 1.2m, null, null, null, null);
+        var precoBom2 = new PrecoTaxaResponse("2026-01-06", 1.3m, null, null, null, null);
+
+        var client = new FakeTdApiClient(
+            Result<TitulosResponse>.Success(new TitulosResponse(false, [])),
+            (_, _, _) => [precoBom1, precoRuim, precoBom2]);
+        var adapter = CriarAdapter(client, new FakeInstrumentoWriteRepository(), new FakeUnitOfWork());
+
+        var itens = await ColetarLidos(adapter.FetchAsync("titulo-x", new DateOnly(2026, 1, 5), CancellationToken.None));
+
+        Assert.Equal(3, itens.Count);
+
+        Assert.True(itens[0].Preco.IsSuccess);
+        Assert.False(itens[0].TruncaColeta);
+
+        Assert.True(itens[1].Preco.IsFailure);
+        Assert.Equal(PrecoErrors.DataRefVazia.Code, itens[1].Preco.Error.Code);
+        Assert.False(itens[1].TruncaColeta);
+
+        Assert.True(itens[2].Preco.IsSuccess);
+        Assert.False(itens[2].TruncaColeta);
     }
 
     [Fact]

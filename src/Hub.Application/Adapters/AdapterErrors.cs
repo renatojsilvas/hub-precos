@@ -15,4 +15,10 @@ public static class AdapterErrors
 
     public static readonly Error TdApiDataBaseInvalida =
         new("TdApi.DataBaseInvalida", "TD API preco has an unparseable dataBase.", ErrorType.Validation);
+
+    public static readonly Error TdApiColetaIncompleta =
+        new(
+            "TdApi.ColetaIncompleta",
+            "TD API pagination stopped by a page or total-count limit before completion; partial result discarded.",
+            ErrorType.Validation);
 }
